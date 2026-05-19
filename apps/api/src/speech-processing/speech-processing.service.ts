@@ -60,6 +60,7 @@ const JOB_TTL_MS = 15 * 60 * 1000;
 const OPENAI_DEFAULT_ENDPOINT = "https://api.openai.com/v1";
 const OPENAI_DEFAULT_MODEL = "gpt-4o-transcribe";
 const SPEECH_TICKS_PER_SECOND = 10_000_000;
+const AZURE_STANDARD_RECOGNITION_PATH = "/speech/recognition/conversation/cognitiveservices/v1";
 
 @Injectable()
 export class SpeechProcessingService {
@@ -338,14 +339,45 @@ function normalizedLanguageCode(value: string) {
 }
 
 function azureSpeechConfig(endpointUrl: string, apiKey?: string | null, languageCode?: string) {
-  const trimmed = endpointUrl.replace(/\/+$/, "");
+  const url = azureSpeechConnectionUrl(endpointUrl, languageCode);
   const key = stringValue(apiKey);
-  if (trimmed.includes("/speech/recognition/")) {
-    const url = new URL(trimmed);
-    url.searchParams.set("language", languageCode || "nb-NO");
+  if (url.pathname.includes("/speech/recognition/")) {
     return SpeechSDK.SpeechConfig.fromEndpoint(url, key);
   }
-  return SpeechSDK.SpeechConfig.fromHost(new URL(trimmed), key);
+  const hostUrl = new URL(url);
+  if (hostUrl.protocol === "ws:") {
+    hostUrl.protocol = "http:";
+  } else if (hostUrl.protocol === "wss:") {
+    hostUrl.protocol = "https:";
+  }
+  return SpeechSDK.SpeechConfig.fromHost(hostUrl, key);
+}
+
+function azureSpeechConnectionUrl(endpointUrl: string, languageCode?: string) {
+  const candidate = endpointUrl.includes("://") ? endpointUrl : `http://${endpointUrl}`;
+  const url = new URL(candidate);
+  if (!url.hostname) {
+    throw new BadRequestException(mobileError("speech_endpoint_required", "Managed Azure speech endpoint is required for server processing"));
+  }
+
+  if (!["http:", "https:", "ws:", "wss:"].includes(url.protocol)) {
+    throw new BadRequestException(mobileError("speech_endpoint_required", "Managed Azure speech endpoint must use http, https, ws, or wss"));
+  }
+
+  url.search = "";
+  url.hash = "";
+
+  const routePrefix = url.pathname.replace(/\/+$/, "");
+  if (!routePrefix || routePrefix === "/") {
+    url.pathname = "";
+    return url;
+  }
+
+  if (!routePrefix.endsWith(AZURE_STANDARD_RECOGNITION_PATH)) {
+    url.pathname = `${routePrefix}/${AZURE_STANDARD_RECOGNITION_PATH.replace(/^\/+/, "")}`;
+  }
+  url.searchParams.set("language", languageCode || "nb-NO");
+  return url;
 }
 
 function recognizeAzureFile(
