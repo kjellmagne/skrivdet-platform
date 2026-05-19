@@ -14,6 +14,8 @@ const helpText = {
   speechEndpointUrl: "Endpoint URL for the selected speech provider. Use this for self-hosted or controlled-environment speech services such as Azure Speech containers or internal gateway routes. Locks app UI when set.",
   speechModelName: "Optional model identifier for speech providers that expose multiple models. Leave unset when the service does not use model names. Locks app UI when set.",
   speechApiKey: "Optional API key for the selected speech provider. Prefer an internal gateway endpoint or tenant-scoped key when possible. If sent to the app, it should be treated as a managed credential.",
+  speechServerProcessing: "Enterprise-only saved-recording mode. The iOS app uploads the finished audio to the skrivDET API, where a short-lived isolated job sends it to this managed STT provider and reports percentage progress back to the app. Audio is not written to persistent storage by the API.",
+  speechServerProcessingEndpointUrl: "API base URL for isolated speech jobs. The app calls /jobs below this URL with its enterprise activation token. Use the public skrivDET API unless this tenant has a dedicated private API gateway.",
   documentGenerationProviderType: "Choose how skrivDET turns the transcript into a finished note. Add provider profiles manually, then choose the default managed provider. Values exposed here: ollama and openai_compatible. Use OpenAI-compatible for OpenAI, vLLM, and internal OpenAI-compatible gateways. Locks app UI when a managed provider is selected.",
   documentGenerationEndpointUrl: "Endpoint URL for the document-generation provider. Use this for internal gateways, self-hosted providers, or OpenAI-compatible services. Locks app UI when set.",
   documentGenerationModel: "Model identifier used for document generation. Choose the organization-approved model for note formatting. Locks app UI when set.",
@@ -66,6 +68,8 @@ type SpeechProviderConfig = {
   modelName: string;
   apiKey: string;
   speakerDiarizationEnabled: boolean;
+  serverProcessingEnabled: boolean;
+  serverProcessingEndpointUrl: string;
 };
 
 type FormatterProviderProfile = {
@@ -124,6 +128,7 @@ const empty = {
   speechDiarizationEnabled: false,
   speechAvailableProviders: ["local", "apple_online", "openai", "azure"],
   speechProviderConfigs: {},
+  speechServerProcessingEndpointUrl: "https://api.skrivdet.no/api/v1/speech-processing",
   managePrivacyControl: true,
   privacyControlEnabled: true,
   userMayChangePrivacyControl: false,
@@ -550,6 +555,8 @@ export default function ConfigsPage() {
               modelName: provider.model ? config.modelName || null : null,
               apiKey: provider.endpoint ? config.apiKey || null : null,
               speakerDiarizationEnabled: provider.diarization ? Boolean(config.speakerDiarizationEnabled) : false,
+              serverProcessingEnabled: provider.endpoint ? Boolean(config.serverProcessingEnabled) : false,
+              serverProcessingEndpointUrl: provider.endpoint && config.serverProcessingEnabled ? config.serverProcessingEndpointUrl || null : null,
               privacyClass: provider.privacy,
               ready: provider.ready
             }];
@@ -972,6 +979,20 @@ export default function ConfigsPage() {
                             {provider.model && <ModelField label="Model name" help={helpText.speechModelName} value={config.modelName} onChange={(value) => updateSpeechConfig(provider.value, { modelName: value })} loading={modelLoading === "speech" && modelLoadingKey === modelRequestKey("speech")} options={form.speechProviderType === provider.value && modelLookupKeys.speech === modelRequestKey("speech") ? modelOptions.speech : []} onOpen={() => setSpeechDefault(provider.value)} />}
                             {provider.endpoint && <div className="field"><FieldLabel help={helpText.speechApiKey}>Managed API key</FieldLabel><input className="input" type="password" autoComplete="off" value={config.apiKey} onChange={(e) => updateSpeechConfig(provider.value, { apiKey: e.target.value })} placeholder="Optional managed key" /></div>}
                             {provider.diarization && <label className="checkbox-row provider-inline-check"><input type="checkbox" checked={Boolean(config.speakerDiarizationEnabled)} onChange={(e) => updateSpeechConfig(provider.value, { speakerDiarizationEnabled: e.target.checked })} /> Saved-recording diarization</label>}
+                            {provider.endpoint && (
+                              <>
+                                <label className="checkbox-row provider-inline-check">
+                                  <input type="checkbox" checked={Boolean(config.serverProcessingEnabled)} onChange={(e) => updateSpeechConfig(provider.value, { serverProcessingEnabled: e.target.checked })} />
+                                  <span><FieldLabel help={helpText.speechServerProcessing}>Server process saved recordings</FieldLabel></span>
+                                </label>
+                                {config.serverProcessingEnabled && (
+                                  <div className="field">
+                                    <FieldLabel help={helpText.speechServerProcessingEndpointUrl}>Server processing API</FieldLabel>
+                                    <input className="input" value={config.serverProcessingEndpointUrl} onChange={(e) => updateSpeechConfig(provider.value, { serverProcessingEndpointUrl: e.target.value })} />
+                                  </div>
+                                )}
+                              </>
+                            )}
                           </div>
                         )}
                       </div>
@@ -1220,7 +1241,9 @@ function speechProviderConfig(source: any, providerValue: string): SpeechProvide
     endpointUrl: existing.endpointUrl ?? provider?.endpointDefault ?? "",
     modelName: existing.modelName ?? provider?.modelDefault ?? "",
     apiKey: existing.apiKey ?? "",
-    speakerDiarizationEnabled: Boolean(existing.speakerDiarizationEnabled)
+    speakerDiarizationEnabled: Boolean(existing.speakerDiarizationEnabled),
+    serverProcessingEnabled: Boolean(existing.serverProcessingEnabled),
+    serverProcessingEndpointUrl: existing.serverProcessingEndpointUrl ?? "https://api.skrivdet.no/api/v1/speech-processing"
   };
 }
 
@@ -1232,7 +1255,9 @@ function speechConfigFromProfile(profile: any, providerProfiles: any) {
       endpointUrl: selected ? profile.speechEndpointUrl ?? stored.endpointUrl ?? provider.endpointDefault ?? "" : stored.endpointUrl ?? provider.endpointDefault ?? "",
       modelName: selected ? profile.speechModelName ?? stored.modelName ?? provider.modelDefault ?? "" : stored.modelName ?? provider.modelDefault ?? "",
       apiKey: selected ? profile.speechApiKey ?? stored.apiKey ?? "" : stored.apiKey ?? "",
-      speakerDiarizationEnabled: selected ? providerProfiles?.speech?.speakerDiarizationEnabled ?? stored.speakerDiarizationEnabled ?? false : stored.speakerDiarizationEnabled ?? false
+      speakerDiarizationEnabled: selected ? providerProfiles?.speech?.speakerDiarizationEnabled ?? stored.speakerDiarizationEnabled ?? false : stored.speakerDiarizationEnabled ?? false,
+      serverProcessingEnabled: Boolean(stored.serverProcessingEnabled),
+      serverProcessingEndpointUrl: stored.serverProcessingEndpointUrl ?? "https://api.skrivdet.no/api/v1/speech-processing"
     }];
   }));
 }

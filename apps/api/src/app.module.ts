@@ -6,6 +6,7 @@ import { AuthModule } from "./auth/auth.module";
 import { PrismaModule } from "./prisma/prisma.module";
 import { ActivationModule } from "./activation/activation.module";
 import { TemplatesModule } from "./templates/templates.module";
+import { SpeechProcessingModule } from "./speech-processing/speech-processing.module";
 import { AdminModule } from "./admin/admin.module";
 import { HealthModule } from "./health/health.module";
 import { validateEnvironment } from "./config/environment";
@@ -23,6 +24,7 @@ import { RateLimitGuard } from "./common/rate-limit.guard";
     AuthModule,
     ActivationModule,
     TemplatesModule,
+    SpeechProcessingModule,
     AdminModule,
     HealthModule
   ],

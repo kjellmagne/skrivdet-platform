@@ -219,6 +219,16 @@ export class ActivationService {
     };
   }
 
+  async assertEnterpriseActivationToken(activationToken: string) {
+    const activation = await this.findActivationByToken(activationToken);
+    this.assertUsable(activation.status, null);
+    this.assertActivationLicenseUsable(activation);
+    if (activation.kind !== "enterprise" || !activation.enterpriseLicenseKey?.configProfile || !activation.tenantId) {
+      throw new ForbiddenException(mobileError("enterprise_activation_required", "Enterprise activation is required"));
+    }
+    return activation;
+  }
+
   private async findActivationByToken(activationToken: string) {
     if (!activationToken) throw new UnauthorizedActivation();
 
