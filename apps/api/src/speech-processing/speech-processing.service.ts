@@ -61,6 +61,7 @@ const OPENAI_DEFAULT_ENDPOINT = "https://api.openai.com/v1";
 const OPENAI_DEFAULT_MODEL = "gpt-4o-transcribe";
 const SPEECH_TICKS_PER_SECOND = 10_000_000;
 const AZURE_STANDARD_RECOGNITION_PATH = "/speech/recognition/conversation/cognitiveservices/v1";
+type OpenAiTranscriptionResponseFormat = "json" | "verbose_json";
 
 @Injectable()
 export class SpeechProcessingService {
@@ -177,24 +178,15 @@ export class SpeechProcessingService {
       throw new BadRequestException(mobileError("speech_api_key_required", "Managed speech provider API key is required for server processing"));
     }
 
+    const preferredFormat = openAiTranscriptionResponseFormat(modelName);
+
     progress(30, "Uploading audio from isolated server to speech provider.");
-    const form = new FormData();
-    form.append("file", new Blob([new Uint8Array(input.audioBuffer)], { type: input.mimeType }), input.filename);
-    form.append("model", modelName);
-    if (input.languageCode) {
-      form.append("language", normalizedLanguageCode(input.languageCode));
-    }
-    form.append("response_format", "verbose_json");
-    form.append("timestamp_granularities[]", "segment");
-
     progress(55, "Provider is transcribing the recording.");
-    const response = await fetch(requestUrl, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}` },
-      body: form
-    });
+    let { response, data } = await requestOpenAiTranscription(requestUrl, apiKey, input, modelName, preferredFormat);
+    if (!response.ok && preferredFormat === "verbose_json" && isResponseFormatCompatibilityError(data)) {
+      ({ response, data } = await requestOpenAiTranscription(requestUrl, apiKey, input, modelName, "json"));
+    }
 
-    const data = await response.json().catch(() => null);
     if (!response.ok) {
       const detail = data?.error?.message || data?.message || response.statusText || "Speech provider request failed";
       throw new BadRequestException(mobileError("speech_provider_failed", String(detail)));
@@ -336,6 +328,48 @@ function transcriptionUrl(endpointUrl: string) {
 
 function normalizedLanguageCode(value: string) {
   return value.split(/[-_]/)[0]?.toLowerCase() || value;
+}
+
+async function requestOpenAiTranscription(
+  requestUrl: string,
+  apiKey: string,
+  input: CreateSpeechJobInput,
+  modelName: string,
+  responseFormat: OpenAiTranscriptionResponseFormat
+) {
+  const form = new FormData();
+  form.append("file", new Blob([new Uint8Array(input.audioBuffer)], { type: input.mimeType }), input.filename);
+  form.append("model", modelName);
+  if (input.languageCode) {
+    form.append("language", normalizedLanguageCode(input.languageCode));
+  }
+  form.append("response_format", responseFormat);
+  if (responseFormat === "verbose_json") {
+    form.append("timestamp_granularities[]", "segment");
+  }
+
+  const response = await fetch(requestUrl, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${apiKey}` },
+    body: form
+  });
+  const data = await response.json().catch(() => null);
+  return { response, data };
+}
+
+function openAiTranscriptionResponseFormat(modelName: string): OpenAiTranscriptionResponseFormat {
+  const normalized = modelName.trim().toLowerCase();
+  if (normalized.includes("gpt-4o-transcribe") || normalized.includes("gpt-4o-mini-transcribe")) {
+    return "json";
+  }
+  return "verbose_json";
+}
+
+function isResponseFormatCompatibilityError(data: any) {
+  const detail = `${data?.error?.message ?? ""} ${data?.message ?? ""}`.toLowerCase();
+  return detail.includes("response_format")
+    && detail.includes("verbose_json")
+    && detail.includes("not compatible");
 }
 
 function azureSpeechConfig(endpointUrl: string, apiKey?: string | null, languageCode?: string) {
