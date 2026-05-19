@@ -1,5 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { randomUUID } from "crypto";
+import * as SpeechSDK from "microsoft-cognitiveservices-speech-sdk";
 import { ActivationService, mobileError } from "../activation/activation.service";
 import { decryptConfigProfileSecrets } from "../common/secret-crypto";
 
@@ -58,6 +59,7 @@ type SpeechProviderProfile = {
 const JOB_TTL_MS = 15 * 60 * 1000;
 const OPENAI_DEFAULT_ENDPOINT = "https://api.openai.com/v1";
 const OPENAI_DEFAULT_MODEL = "gpt-4o-transcribe";
+const SPEECH_TICKS_PER_SECOND = 10_000_000;
 
 @Injectable()
 export class SpeechProcessingService {
@@ -154,7 +156,7 @@ export class SpeechProcessingService {
     progress: (percent: number, message: string) => void
   ): Promise<TranscriptPayload> {
     if (provider === "azure") {
-      return this.transcribeWithAzureRest(input, providerProfile, progress);
+      return this.transcribeWithAzureSdk(input, providerProfile, progress);
     }
 
     return this.transcribeWithOpenAICompatible(input, providerProfile, progress);
@@ -212,7 +214,7 @@ export class SpeechProcessingService {
     };
   }
 
-  private async transcribeWithAzureRest(
+  private async transcribeWithAzureSdk(
     input: CreateSpeechJobInput,
     providerProfile: SpeechProviderProfile,
     progress: (percent: number, message: string) => void
@@ -222,25 +224,35 @@ export class SpeechProcessingService {
       throw new BadRequestException(mobileError("speech_endpoint_required", "Managed Azure speech endpoint is required for server processing"));
     }
 
-    progress(30, "Uploading prepared audio to Azure speech endpoint.");
-    const response = await fetch(azureRecognitionUrl(endpointUrl, input.languageCode), {
-      method: "POST",
-      headers: azureHeaders(providerProfile.apiKey),
-      body: new Uint8Array(input.audioBuffer)
-    });
+    progress(30, "Streaming prepared audio to Azure speech endpoint.");
+    const duration = Math.max(Number(input.durationSeconds || 1), 1);
+    const speechConfig = azureSpeechConfig(endpointUrl, providerProfile.apiKey, input.languageCode);
+    speechConfig.speechRecognitionLanguage = input.languageCode || "nb-NO";
+    speechConfig.outputFormat = SpeechSDK.OutputFormat.Detailed;
+    speechConfig.setProperty(SpeechSDK.PropertyId.SpeechServiceResponse_RequestWordLevelTimestamps, "true");
+    speechConfig.setProperty(SpeechSDK.PropertyId.SpeechServiceResponse_OutputFormatOption, "detailed");
 
-    const data = await response.json().catch(() => null);
-    if (!response.ok) {
-      const detail = data?.error?.message || data?.message || data?.DisplayText || response.statusText || "Azure speech request failed";
-      throw new BadRequestException(mobileError("speech_provider_failed", String(detail)));
+    const audioConfig = SpeechSDK.AudioConfig.fromWavFileInput(input.audioBuffer, input.filename || "server-stt.wav");
+    const recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
+    const segments: TranscriptSegment[] = [];
+
+    try {
+      await recognizeAzureFile(recognizer, duration, (result) => {
+        const segment = azureResultSegment(result, duration);
+        if (!segment) return;
+        segments.push(segment);
+        const endRatio = Math.min(segment.endTime / duration, 1);
+        progress(45 + endRatio * 40, "Azure is transcribing the recording.");
+      });
+    } catch (error) {
+      throw new BadRequestException(mobileError("speech_provider_failed", userErrorMessage(error)));
+    } finally {
+      await closeAzureRecognizer(recognizer);
+      audioConfig.close();
     }
 
     progress(88, "Reading Azure transcription result.");
-    const text = stringValue(data?.DisplayText)
-      ?? stringValue(data?.text)
-      ?? stringValue(data?.NBest?.[0]?.Display)
-      ?? stringValue(data?.NBest?.[0]?.Lexical)
-      ?? "";
+    const text = segments.map((segment) => segment.text).join(" ").trim();
 
     if (!text) {
       throw new BadRequestException(mobileError("empty_transcript", "Azure speech returned an empty transcript"));
@@ -249,7 +261,7 @@ export class SpeechProcessingService {
     return {
       languageCode: input.languageCode || "und",
       sourceEngine: "Server speech processing (Azure Speech)",
-      segments: transcriptSegments(data, text, Math.max(Number(input.durationSeconds || 1), 1)),
+      segments: segments.length ? segments : transcriptSegments(null, text, duration),
       previewText: text
     };
   }
@@ -325,26 +337,99 @@ function normalizedLanguageCode(value: string) {
   return value.split(/[-_]/)[0]?.toLowerCase() || value;
 }
 
-function azureRecognitionUrl(endpointUrl: string, languageCode?: string) {
+function azureSpeechConfig(endpointUrl: string, apiKey?: string | null, languageCode?: string) {
   const trimmed = endpointUrl.replace(/\/+$/, "");
-  const base = trimmed.includes("/speech/recognition/")
-    ? trimmed
-    : `${trimmed}/speech/recognition/conversation/cognitiveservices/v1`;
-  const url = new URL(base);
-  url.searchParams.set("language", languageCode || "nb-NO");
-  return url;
+  const key = stringValue(apiKey);
+  if (trimmed.includes("/speech/recognition/")) {
+    const url = new URL(trimmed);
+    url.searchParams.set("language", languageCode || "nb-NO");
+    return SpeechSDK.SpeechConfig.fromEndpoint(url, key);
+  }
+  return SpeechSDK.SpeechConfig.fromHost(new URL(trimmed), key);
 }
 
-function azureHeaders(apiKey?: string | null) {
-  const headers: Record<string, string> = {
-    "Content-Type": "audio/wav; codecs=audio/pcm; samplerate=16000",
-    Accept: "application/json"
+function recognizeAzureFile(
+  recognizer: SpeechSDK.SpeechRecognizer,
+  duration: number,
+  onSegment: (result: SpeechSDK.SpeechRecognitionResult) => void
+) {
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const timeoutMs = Math.min(Math.max((duration * 4 + 120) * 1000, 60_000), JOB_TTL_MS - 30_000);
+    const timeout = setTimeout(() => {
+      finish(new Error("Azure speech processing timed out"));
+    }, timeoutMs);
+
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      recognizer.stopContinuousRecognitionAsync(
+        () => error ? reject(error) : resolve(),
+        (stopError) => error ? reject(error) : reject(new Error(stopError))
+      );
+    };
+
+    recognizer.recognized = (_sender, event) => {
+      if (event.result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
+        onSegment(event.result);
+      }
+      if (event.result.reason === SpeechSDK.ResultReason.Canceled) {
+        const details = SpeechSDK.CancellationDetails.fromResult(event.result);
+        finish(new Error(details.errorDetails || event.result.errorDetails || "Azure speech recognition was canceled"));
+      }
+    };
+
+    recognizer.canceled = (_sender, event) => {
+      finish(new Error(event.errorDetails || "Azure speech recognition was canceled"));
+    };
+
+    recognizer.sessionStopped = () => {
+      finish();
+    };
+
+    recognizer.startContinuousRecognitionAsync(
+      undefined,
+      (error) => finish(new Error(error))
+    );
+  });
+}
+
+function azureResultSegment(result: SpeechSDK.SpeechRecognitionResult, fallbackDuration: number): TranscriptSegment | null {
+  const text = stringValue(result.text) ?? azureDisplayText(result) ?? "";
+  if (!text.trim()) return null;
+  const startTime = Math.max(result.offset / SPEECH_TICKS_PER_SECOND, 0);
+  const resultDuration = Math.max(result.duration / SPEECH_TICKS_PER_SECOND, 0.1);
+  return {
+    id: randomUUID(),
+    text,
+    startTime,
+    endTime: Math.max(startTime + resultDuration, Math.min(fallbackDuration, startTime + 0.1)),
+    speakerLabel: stringValue(result.speakerId) ?? null
   };
-  const key = stringValue(apiKey);
-  if (key) {
-    headers["Ocp-Apim-Subscription-Key"] = key;
+}
+
+function azureDisplayText(result: SpeechSDK.SpeechRecognitionResult) {
+  const json = result.properties.getProperty(SpeechSDK.PropertyId.SpeechServiceResponse_JsonResult);
+  const data = parseJson(json);
+  return stringValue(data?.DisplayText)
+    ?? stringValue(data?.NBest?.[0]?.Display)
+    ?? stringValue(data?.NBest?.[0]?.Lexical);
+}
+
+function parseJson(value?: string) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
   }
-  return headers;
+}
+
+function closeAzureRecognizer(recognizer: SpeechSDK.SpeechRecognizer) {
+  return new Promise<void>((resolve) => {
+    recognizer.close(resolve, () => resolve());
+  });
 }
 
 function transcriptSegments(data: any, fallbackText: string, duration: number): TranscriptSegment[] {

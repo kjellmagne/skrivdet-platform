@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readdirSync, readFileSync } from "fs";
+import { existsSync, readdirSync, readFileSync } from "fs";
 import { dirname, resolve } from "path";
 import { fileURLToPath } from "url";
 import { JwtService } from "@nestjs/jwt";
@@ -177,10 +177,13 @@ describe("TemplatesService", () => {
   it("validates every bundled iOS template against the backend mobile schema", () => {
     const service = new TemplatesService({} as any, {} as any, new JwtService());
     const currentFile = fileURLToPath(import.meta.url);
-    const templateDirectory = resolve(
-      dirname(currentFile),
-      "../../../../ios-app/skrivDET/Resources/Templates"
-    );
+    const templateDirectory = [
+      "../../../../ios-app/skrivDET/Resources/Templates",
+      "../../../../skrivdet-ios-local/ios-app/skrivDET/Resources/Templates"
+    ]
+      .map((relativePath) => resolve(dirname(currentFile), relativePath))
+      .find((candidate) => existsSync(candidate));
+    expect(templateDirectory).toBeTruthy();
     const templateFiles = readdirSync(templateDirectory)
       .filter((fileName) => fileName.endsWith(".yaml"))
       .sort();
