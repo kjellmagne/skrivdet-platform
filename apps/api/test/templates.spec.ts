@@ -200,6 +200,13 @@ describe("TemplatesService", () => {
     expect(parsed.llm_prompting.system_prompt_additions).toContain("prosjektmøtereferat");
   });
 
+  it("does not seed the mobile template repository with a localhost URL", () => {
+    const seedSource = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../../prisma/seed.ts"), "utf8");
+
+    expect(seedSource).not.toContain("http://localhost:4000/api/v1/templates/manifest");
+    expect(seedSource).toContain("https://api.skrivdet.no/api/v1/templates/manifest");
+  });
+
   it("validates every bundled iOS template against the backend mobile schema", () => {
     const service = new TemplatesService({} as any, {} as any, new JwtService());
     const currentFile = fileURLToPath(import.meta.url);

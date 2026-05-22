@@ -567,6 +567,11 @@ function defaultManagedPolicy() {
 async function main() {
   const maintenanceUntil = new Date("2027-04-29T00:00:00.000Z");
   const passwordHash = await bcrypt.hash(process.env.SEED_ADMIN_PASSWORD ?? "ChangeMe123!", 12);
+  const templateRepositoryUrl =
+    process.env.SEED_TEMPLATE_REPOSITORY_URL?.trim()
+    || process.env.TEMPLATE_REPOSITORY_URL?.trim()
+    || "https://api.skrivdet.no/api/v1/templates/manifest";
+
   await prisma.adminUser.upsert({
     where: { email: "admin@skrivdet.local" },
     update: {},
@@ -581,7 +586,7 @@ async function main() {
   const profile = await prisma.configProfile.upsert({
     where: { id: "00000000-0000-0000-0000-000000000101" },
     update: {
-      templateRepositoryUrl: "http://localhost:4000/api/v1/templates/manifest",
+      templateRepositoryUrl,
       speechProviderType: "azure",
       speechEndpointUrl: "http://192.168.222.171:5000",
       speechModelName: null,
@@ -633,7 +638,7 @@ async function main() {
       documentGenerationProviderType: "openai_compatible",
       documentGenerationEndpointUrl: "http://localhost:8000/v1",
       documentGenerationModel: "meta-llama/Meta-Llama-3.1-8B-Instruct",
-      templateRepositoryUrl: "http://localhost:4000/api/v1/templates/manifest",
+      templateRepositoryUrl,
       telemetryEndpointUrl: "https://telemetry.example.internal/events",
       featureFlags: { developerMode: false, allowExternalProviders: false },
       allowedProviderRestrictions: ["azure", "openai_compatible", "local_heuristic"],
