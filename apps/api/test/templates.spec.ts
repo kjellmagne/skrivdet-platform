@@ -174,6 +174,32 @@ describe("TemplatesService", () => {
     }
   });
 
+  it("includes a Norwegian project meeting seed template with project follow-up sections", () => {
+    const service = new TemplatesService({} as any, {} as any, new JwtService());
+    const projectMeeting = seedTemplates.find((template) => template.title === "Prosjektmøte");
+
+    expect(projectMeeting).toBeTruthy();
+    const parsed = service.validateYamlContent(templateYaml(projectMeeting!));
+
+    expect(parsed.identity).toMatchObject({
+      title: "Prosjektmøte",
+      language: "nb-NO",
+      category: "prosjektmote"
+    });
+    expect(parsed.perspective.audience).toBe("colleagues");
+    expect(parsed.context.typical_participants?.map((participant) => participant.role)).toEqual(expect.arrayContaining(["prosjektleder", "fagansvarlig"]));
+    expect(parsed.structure.sections.map((section) => section.title)).toEqual(expect.arrayContaining([
+      "Status og fremdrift",
+      "Beslutninger",
+      "Risiko, blokkere og avhengigheter",
+      "Tiltak og ansvar",
+      "Åpne spørsmål"
+    ]));
+    expect(parsed.structure.sections.find((section) => section.title === "Tiltak og ansvar")).toMatchObject({ format: "table", required: true });
+    expect(parsed.content_rules.required_elements?.join(" ")).toContain("prosjektstatus");
+    expect(parsed.llm_prompting.system_prompt_additions).toContain("prosjektmøtereferat");
+  });
+
   it("validates every bundled iOS template against the backend mobile schema", () => {
     const service = new TemplatesService({} as any, {} as any, new JwtService());
     const currentFile = fileURLToPath(import.meta.url);
@@ -319,6 +345,61 @@ describe("TemplatesService", () => {
       provider: { type: "openai", model: "gpt-5-mini" },
       error: null
     });
+  });
+
+  it("rejects admin previews with headings outside the mobile template plan", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({
+        documentMarkdown: "## Summary\nGenerated note.\n\n## Extra heading\nThis heading is not in the template.",
+        sections: [],
+        summary: "Generated note.",
+        decisions: [],
+        actions: [],
+        blockers: [],
+        nextSteps: [],
+        actionItems: [],
+        structuredOutputJSON: null
+      }) } }]
+    }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const update = vi.fn().mockImplementation(({ data }) => ({
+      previewMarkdown: data.previewMarkdown ?? null,
+      previewStructured: data.previewStructured ?? null,
+      previewProviderType: data.previewProviderType ?? null,
+      previewProviderModel: data.previewProviderModel ?? null,
+      previewGeneratedAt: data.previewGeneratedAt ?? null,
+      previewError: data.previewError ?? null
+    }));
+    const service = new TemplatesService({
+      systemSetting: {
+        findUnique: vi.fn().mockResolvedValue({
+          value: {
+            providerType: "openai",
+            endpointUrl: "https://api.openai.com/v1",
+            apiKey: "sk-preview",
+            model: "gpt-5-mini"
+          }
+        })
+      },
+      templateDraft: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: "draft-1",
+          yamlContent: validYaml,
+          sampleTranscript: "Speaker: short sample.",
+          variant: { family: { title: "Family" } }
+        }),
+        update
+      }
+    } as any, { log: vi.fn() } as any, new JwtService());
+
+    const preview = await service.generatePreview("draft-1", { id: "admin-1", email: "admin@example.com" });
+
+    expect(preview.error).toContain("Preview documentMarkdown did not match the template section headings and order.");
+    expect(update).toHaveBeenLastCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        previewError: expect.stringContaining("Preview documentMarkdown did not match the template section headings and order.")
+      })
+    }));
   });
 
   it("reports missing preview provider fields", async () => {

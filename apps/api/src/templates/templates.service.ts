@@ -1003,6 +1003,9 @@ function formatterPreviewSystemPrompt() {
     "Every array item outside sections must be a plain string.",
     "Each sections item must match one template section exactly, in the same order, using the provided section id and title.",
     "documentMarkdown must be the complete user-facing document and must follow the selected template sections, order, tone, perspective, content rules, and fallback behavior.",
+    "Do not add extra documentMarkdown headings that are not in the template.",
+    "Do not rename template section headings.",
+    "If structured side-output is requested by the template, put it as a JSON string in structuredOutputJSON. Otherwise use null.",
     "Keep the output factual and faithful to the transcript.",
     "Do not invent people, dates, decisions, action owners, diagnoses, or consent.",
     "If the transcript does not support a section, include one short fallback sentence for that section instead of leaving it empty.",
@@ -1061,6 +1064,9 @@ function formatterPreviewUserPrompt(template: AppTemplateYaml, sampleTranscript:
     "Goals:",
     bulletList(template.context.goals ?? [], "No explicit goals defined."),
     "",
+    "Related processes:",
+    bulletList(template.context.related_processes ?? [], "No related processes defined."),
+    "",
     "Required content:",
     bulletList(template.content_rules.required_elements ?? [], "Use only information supported by the transcript."),
     "",
@@ -1069,6 +1075,9 @@ function formatterPreviewUserPrompt(template: AppTemplateYaml, sampleTranscript:
     "",
     "Uncertainty handling:",
     `- ${template.content_rules.uncertainty_handling || "If the transcript is unclear or incomplete, explicitly mark missing or unclear information instead of inventing content."}`,
+    "",
+    "Speaker attribution:",
+    `- ${template.content_rules.speaker_attribution || "none"}`,
     "",
     "Action and decision formatting:",
     `- Action item format: ${template.content_rules.action_item_format || "not specified"}`,
@@ -1081,13 +1090,13 @@ function formatterPreviewUserPrompt(template: AppTemplateYaml, sampleTranscript:
     `- ${template.llm_prompting.fallback_behavior || "If a required section has no support in the transcript, write that it was not covered instead of generating unsupported content."}`,
     "",
     "Output structure:",
-    "Use this exact section plan. Include all required sections and keep section titles unchanged.",
+    "Use this exact section plan. Include all required sections, keep section titles unchanged, and do not add headings outside this plan.",
     "",
     sectionPlan,
     "",
     "Post-processing:",
     postProcessing?.extract_action_items
-      ? "Extract actionItems only when the transcript contains clear, explicit follow-up tasks or commitments. Otherwise return an empty actionItems array."
+      ? "Populate actionItems only when the transcript contains clear, explicit follow-up tasks or commitments. Otherwise return an empty actionItems array. Do not add a separate action-item section unless that section already exists in the template structure."
       : "Return an empty actionItems array for this template.",
     structuredOutput
       ? `If structured side-output is requested, put a JSON string matching this schema in structuredOutputJSON:\n${structuredOutput}`
@@ -1166,20 +1175,20 @@ function normalizeFormatterPreviewPayload(value: unknown): FormatterPreviewPaylo
 
 function previewDocumentMarkdown(payload: FormatterPreviewPayload, template: AppTemplateYaml) {
   const markdown = payload.documentMarkdown?.trim();
-  if (markdown && documentMarkdownMatchesRequiredSections(markdown, template)) return markdown;
+  if (markdown && documentMarkdownMatchesTemplate(markdown, template)) return markdown;
 
   if (payload.sections?.length) {
     return payload.sections.map((section) => `## ${section.title}\n${section.markdown}`).join("\n\n");
   }
 
   if (markdown) {
-    throw new Error("Preview documentMarkdown did not include the required template section headings.");
+    throw new Error("Preview documentMarkdown did not match the template section headings and order.");
   }
 
   throw new Error("Preview provider response did not include documentMarkdown or sections.");
 }
 
-function documentMarkdownMatchesRequiredSections(markdown: string, template: AppTemplateYaml) {
+function documentMarkdownMatchesTemplate(markdown: string, template: AppTemplateYaml) {
   const headings = markdown
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -1187,10 +1196,23 @@ function documentMarkdownMatchesRequiredSections(markdown: string, template: App
     .map((line) => normalizeHeading(line.replace(/^#{1,6}\s+/, "")));
   if (!headings.length) return false;
 
-  const headingSet = new Set(headings);
-  return template.structure.sections
+  const normalizedTemplateSections = template.structure.sections.map((section) => normalizeHeading(section.title));
+  const requiredTemplateSections = new Set(template.structure.sections
     .filter((section) => section.required)
-    .every((section) => headingSet.has(normalizeHeading(section.title)));
+    .map((section) => normalizeHeading(section.title)));
+
+  const matchedRequiredSections = new Set<string>();
+  let searchIndex = 0;
+
+  for (const heading of headings) {
+    const matchIndex = normalizedTemplateSections.indexOf(heading, searchIndex);
+    if (matchIndex === -1) return false;
+    if (requiredTemplateSections.has(heading)) matchedRequiredSections.add(heading);
+    searchIndex = matchIndex + 1;
+  }
+
+  return requiredTemplateSections.size === matchedRequiredSections.size
+    && [...requiredTemplateSections].every((section) => matchedRequiredSections.has(section));
 }
 
 function outputSections(value: unknown): PreviewOutputSection[] | undefined {
@@ -1213,11 +1235,15 @@ function outputSections(value: unknown): PreviewOutputSection[] | undefined {
 
 function previewSectionsFromMarkdown(markdown: string, template: AppTemplateYaml): PreviewOutputSection[] {
   const markdownByHeading = markdownSections(markdown);
-  return template.structure.sections.map((section) => ({
-    id: templateSectionId(section),
-    title: section.title,
-    markdown: markdownByHeading.get(normalizeHeading(section.title)) ?? "Not covered in the sample transcript."
-  }));
+  return template.structure.sections.flatMap((section) => {
+    const sectionMarkdown = markdownByHeading.get(normalizeHeading(section.title))?.trim();
+    if (!sectionMarkdown) return [];
+    return [{
+      id: templateSectionId(section),
+      title: section.title,
+      markdown: sectionMarkdown
+    }];
+  });
 }
 
 function markdownSections(markdown: string) {

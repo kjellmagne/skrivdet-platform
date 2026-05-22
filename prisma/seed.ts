@@ -31,10 +31,38 @@ export type SeedTemplate = {
   icon: string;
   tags: string[];
   purpose: string;
-  sections: Array<{ title: string; purpose: string; format: "prose" | "bullet_list" | "numbered_list"; required: boolean }>;
+  typicalSetting?: string;
+  typicalParticipants?: Array<{ role: string; name?: string | null }>;
+  goals?: string[];
+  relatedProcesses?: string[];
+  voice?: "first_person_singular" | "first_person_plural" | "third_person" | "dual";
+  audience?: "self" | "colleagues" | "hr" | "bruker" | "arkiv" | "ledelse" | "blandet";
+  tone?: "formell" | "semi_formell" | "samtalepreget";
+  preserveOriginalVoice?: boolean;
+  styleRules?: string[];
+  requiredElements?: string[];
+  exclusions?: string[];
+  uncertaintyHandling?: string;
+  actionItemFormat?: string;
+  decisionMarker?: string;
+  speakerAttribution?: "full_name" | "role_only" | "initials" | "anonymized" | "none";
+  systemPromptAdditions?: string;
+  fallbackBehavior?: string;
+  sampleTranscript?: string;
+  sections: Array<{ title: string; purpose: string; format: "prose" | "bullet_list" | "numbered_list" | "table" | "fill_in" | "quote_block"; required: boolean; extractionHints?: string[] }>;
 };
 
 export function templateYaml(template: SeedTemplate) {
+  const typicalParticipants = template.typicalParticipants ?? [{ role: "speaker" }];
+  const goals = template.goals ?? ["Lage et tydelig og etterprøvbart dokument fra transkripsjonen."];
+  const relatedProcesses = template.relatedProcesses ?? [];
+  const styleRules = template.styleRules ?? [
+    "Skriv klart, konkret og uten å finne på opplysninger.",
+    "Behold viktig kontekst og usikkerhet fra transkripsjonen."
+  ];
+  const requiredElements = template.requiredElements ?? ["Ta bare med informasjon som støttes av transkripsjonen."];
+  const exclusions = template.exclusions ?? ["Ikke legg til irrelevante eller usikre personopplysninger."];
+
   return `identity:
   id: ${template.templateId}
   title: ${template.title}
@@ -47,39 +75,39 @@ ${template.tags.map((tag) => `    - ${tag}`).join("\n")}
   version: 1.0.0
 context:
   purpose: ${template.purpose}
-  typical_setting: Internt arbeid eller møte
+  typical_setting: ${template.typicalSetting ?? "Internt arbeid eller møte"}
   typical_participants:
-    - role: speaker
+${typicalParticipants.map((participant) => `    - role: ${participant.role}${participant.name === undefined ? "" : `\n      name: ${participant.name ?? "null"}`}`).join("\n")}
   goals:
-    - Lage et tydelig og etterprøvbart dokument fra transkripsjonen.
-  related_processes: []
+${goals.map((goal) => `    - ${goal}`).join("\n")}
+  related_processes:
+${relatedProcesses.length ? relatedProcesses.map((process) => `    - ${process}`).join("\n") : "    []"}
 perspective:
-  voice: third_person
-  audience: self
-  tone: semi_formell
+  voice: ${template.voice ?? "third_person"}
+  audience: ${template.audience ?? "self"}
+  tone: ${template.tone ?? "semi_formell"}
   style_rules:
-    - Skriv klart, konkret og uten å finne på opplysninger.
-    - Behold viktig kontekst og usikkerhet fra transkripsjonen.
-  preserve_original_voice: false
+${styleRules.map((rule) => `    - ${rule}`).join("\n")}
+  preserve_original_voice: ${template.preserveOriginalVoice ?? false}
 structure:
   sections:
 ${template.sections.map((section) => `    - title: ${section.title}
       purpose: ${section.purpose}
       format: ${section.format}
       required: ${section.required}
-      extraction_hints: []`).join("\n")}
+      extraction_hints:${section.extractionHints?.length ? `\n${section.extractionHints.map((hint) => `        - ${hint}`).join("\n")}` : " []"}`).join("\n")}
 content_rules:
   required_elements:
-    - Ta bare med informasjon som støttes av transkripsjonen.
+${requiredElements.map((element) => `    - ${element}`).join("\n")}
   exclusions:
-    - Ikke legg til irrelevante eller usikre personopplysninger.
-  uncertainty_handling: Marker uklare eller manglende opplysninger i stedet for å gjette.
-  action_item_format: Bruk ansvarlig, tiltak og frist når det finnes i transkripsjonen.
-  decision_marker: Marker tydelige beslutninger eksplisitt.
-  speaker_attribution: none
+${exclusions.map((exclusion) => `    - ${exclusion}`).join("\n")}
+  uncertainty_handling: ${template.uncertaintyHandling ?? "Marker uklare eller manglende opplysninger i stedet for å gjette."}
+  action_item_format: ${template.actionItemFormat ?? "Bruk ansvarlig, tiltak og frist når det finnes i transkripsjonen."}
+  decision_marker: ${template.decisionMarker ?? "Marker tydelige beslutninger eksplisitt."}
+  speaker_attribution: ${template.speakerAttribution ?? "none"}
 llm_prompting:
-  system_prompt_additions: ""
-  fallback_behavior: Hvis en påkrevd seksjon ikke har støtte i transkripsjonen, skriv at temaet ikke ble omtalt.
+  system_prompt_additions: ${template.systemPromptAdditions ?? "\"\""}
+  fallback_behavior: ${template.fallbackBehavior ?? "Hvis en påkrevd seksjon ikke har støtte i transkripsjonen, skriv at temaet ikke ble omtalt."}
   post_processing:
     extract_action_items: true
 `;
@@ -122,6 +150,117 @@ export const seedTemplates: SeedTemplate[] = [
       { title: "Temaer", purpose: "Oppsummer de viktigste temaene i møtet.", format: "bullet_list", required: true },
       { title: "Beslutninger", purpose: "List tydelige beslutninger.", format: "bullet_list", required: true },
       { title: "Tiltak", purpose: "List oppgaver med ansvarlig og frist når tilgjengelig.", format: "bullet_list", required: false }
+    ]
+  },
+  {
+    familyId: "00000000-0000-4000-8000-000000000306",
+    variantId: "00000000-0000-4000-8000-000000000406",
+    draftId: "00000000-0000-4000-8000-000000000506",
+    publishedId: "00000000-0000-4000-8000-000000000606",
+    templateId: "00000000-0000-4000-8000-000000000206",
+    title: "Prosjektmøte",
+    shortDescription: "Referat for prosjektmøter med status, beslutninger, risiko, avklaringer og handlingspunkter.",
+    category: "prosjektmote",
+    categoryTitle: "Prosjektmøte",
+    icon: "list.bullet.clipboard",
+    tags: ["project", "meeting", "delivery", "follow-up"],
+    purpose: "Gjør et prosjektmøte om til et praktisk referat som viser status, beslutninger, risiko, åpne spørsmål og neste steg.",
+    typicalSetting: "Prosjektmøte, statusmøte, leveransemøte, sprintmøte eller styringsgruppemøte.",
+    typicalParticipants: [
+      { role: "prosjektleder" },
+      { role: "produkteier eller kunde", name: null },
+      { role: "fagansvarlig", name: null },
+      { role: "leveranseansvarlig", name: null }
+    ],
+    goals: [
+      "Oppsummere formål, status og viktig kontekst.",
+      "Skille tydelige beslutninger fra forslag og åpne spørsmål.",
+      "Fange risiko, blokkere, avhengigheter og avklaringsbehov.",
+      "Synliggjøre tiltak med ansvarlig, frist og status."
+    ],
+    relatedProcesses: ["Prosjektstyring", "Leveranseoppfølging", "Kundeoppfølging", "Beslutningslogg"],
+    audience: "colleagues",
+    tone: "semi_formell",
+    styleRules: [
+      "Skriv kort, konkret og handlingsrettet.",
+      "Prioriter beslutninger, avklaringer, risiko og neste steg fremfor kronologisk diskusjon.",
+      "Skill fakta fra vurderinger og forslag.",
+      "Ikke gjør ønsker eller løse forslag om til forpliktelser."
+    ],
+    requiredElements: [
+      "Ta med prosjektstatus, beslutninger, risiko, avhengigheter, åpne spørsmål og tiltak når de er omtalt.",
+      "For hvert tiltak skal ansvarlig, frist og status tas med når transkripsjonen gir grunnlag for det.",
+      "Marker tydelig om en beslutning er endelig, foreslått eller må bekreftes."
+    ],
+    exclusions: [
+      "Ikke ta med småprat eller repetisjon.",
+      "Ikke legg til tekniske detaljer, kostnader eller frister som ikke ble sagt.",
+      "Ikke skriv interne vurderinger som kundeløfter hvis det ikke ble avtalt.",
+      "Ikke inkluder personopplysninger som ikke er relevante for prosjektoppfølging."
+    ],
+    uncertaintyHandling: "Skriv Ikke avklart når ansvar, frist, beslutning eller omfang mangler tydelig støtte i transkripsjonen.",
+    actionItemFormat: "Tiltak - ansvarlig - frist - status",
+    decisionMarker: "Beslutning",
+    speakerAttribution: "role_only",
+    systemPromptAdditions: "Lag et prosjektmøtereferat som kan brukes direkte til oppfølging. Vær streng på hva som faktisk er besluttet, hva som bare er foreslått, og hva som fortsatt må avklares.",
+    fallbackBehavior: "Hvis møtet ikke dekker en påkrevd seksjon, skriv kort at punktet ikke ble omtalt og ikke fyll inn antakelser.",
+    sampleTranscript: [
+      "Prosjektleder: Målet i dag er å avklare status for første leveranse og hva som blokkerer test.",
+      "Fagansvarlig: Integrasjonen er teknisk klar, men vi mangler tilgang til kundens testmiljø.",
+      "Kunde: Jeg sender kontaktperson for testmiljøet i morgen og ønsker en kort statusrapport fredag.",
+      "Leveranseansvarlig: Da tar jeg statusrapporten innen fredag klokken tolv, og vi holder lanseringsdatoen som foreløpig.",
+      "Prosjektleder: Beslutningen er at vi går videre med test når tilgang er bekreftet. Risikoen er tidsplanen hvis tilgang drøyer mer enn to dager."
+    ].join("\n"),
+    sections: [
+      {
+        title: "Mål og kontekst",
+        purpose: "Oppsummer hvorfor møtet ble holdt, prosjektfase og viktig bakgrunn.",
+        format: "prose",
+        required: true,
+        extractionHints: ["mål", "bakgrunn", "prosjektfase", "formål"]
+      },
+      {
+        title: "Status og fremdrift",
+        purpose: "List viktig status, leveranser, milepæler og endringer siden forrige møte.",
+        format: "bullet_list",
+        required: true,
+        extractionHints: ["status", "fremdrift", "milepæl", "leveranse", "endring"]
+      },
+      {
+        title: "Beslutninger",
+        purpose: "List bare beslutninger som tydelig ble tatt eller bekreftet i møtet.",
+        format: "bullet_list",
+        required: true,
+        extractionHints: ["besluttet", "vedtatt", "godkjent", "bekreftet", "enig"]
+      },
+      {
+        title: "Risiko, blokkere og avhengigheter",
+        purpose: "Fang risikoer, blokkere og eksterne avhengigheter som kan påvirke leveransen.",
+        format: "bullet_list",
+        required: false,
+        extractionHints: ["risiko", "blokkerer", "avhengighet", "forsinkelse", "mangler"]
+      },
+      {
+        title: "Tiltak og ansvar",
+        purpose: "Vis konkrete tiltak med ansvarlig, frist og status når det er sagt.",
+        format: "table",
+        required: true,
+        extractionHints: ["tiltak", "oppgave", "ansvarlig", "frist", "innen", "følge opp"]
+      },
+      {
+        title: "Åpne spørsmål",
+        purpose: "List avklaringer, spørsmål og beslutninger som må bekreftes senere.",
+        format: "bullet_list",
+        required: false,
+        extractionHints: ["uavklart", "spørsmål", "må avklares", "venter på", "ikke bekreftet"]
+      },
+      {
+        title: "Neste møte",
+        purpose: "Oppsummer tidspunkt, agenda eller forberedelser til neste møte når det nevnes.",
+        format: "prose",
+        required: false,
+        extractionHints: ["neste møte", "agenda", "forberede", "dato", "tidspunkt"]
+      }
     ]
   },
   {
@@ -305,12 +444,12 @@ async function seedTemplateRepository(tenantId: string) {
 
     await prisma.templateDraft.upsert({
       where: { variantId: template.variantId },
-      update: { yamlContent, sampleTranscript: "Deltaker: Dette er en kort eksempeltranskripsjon for forhåndsvisning." },
+      update: { yamlContent, sampleTranscript: template.sampleTranscript ?? "Deltaker: Dette er en kort eksempeltranskripsjon for forhåndsvisning." },
       create: {
         id: template.draftId,
         variantId: template.variantId,
         yamlContent,
-        sampleTranscript: "Deltaker: Dette er en kort eksempeltranskripsjon for forhåndsvisning."
+        sampleTranscript: template.sampleTranscript ?? "Deltaker: Dette er en kort eksempeltranskripsjon for forhåndsvisning."
       }
     });
 
