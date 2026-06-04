@@ -442,12 +442,13 @@ function recognizeAzureFile(
       }
       if (event.result.reason === SpeechSDK.ResultReason.Canceled) {
         const details = SpeechSDK.CancellationDetails.fromResult(event.result);
-        finish(new Error(details.errorDetails || event.result.errorDetails || "Azure speech recognition was canceled"));
+        const cancellationError = azureCancellationError(details, event.result.errorDetails);
+        finish(cancellationError);
       }
     };
 
     recognizer.canceled = (_sender, event) => {
-      finish(new Error(event.errorDetails || "Azure speech recognition was canceled"));
+      finish(azureCancellationError(event, event.errorDetails));
     };
 
     recognizer.sessionStopped = () => {
@@ -496,6 +497,19 @@ function closeAzureRecognizer(recognizer: SpeechSDK.SpeechRecognizer) {
   return new Promise<void>((resolve) => {
     recognizer.close(resolve, () => resolve());
   });
+}
+
+function azureCancellationError(details: any, fallbackDetails?: string) {
+  const detail = stringValue(fallbackDetails) ?? stringValue(details?.errorDetails);
+  if (detail) return new Error(detail);
+
+  const rawErrorCode = details?.ErrorCode ?? details?.errorCode;
+  const numericErrorCode = typeof rawErrorCode === "number" ? rawErrorCode : Number(rawErrorCode);
+  if (Number.isFinite(numericErrorCode) && numericErrorCode !== 0) {
+    return new Error(`Azure speech recognition was canceled with error code ${numericErrorCode}`);
+  }
+
+  return undefined;
 }
 
 function transcriptSegments(data: any, fallbackText: string, duration: number): TranscriptSegment[] {
