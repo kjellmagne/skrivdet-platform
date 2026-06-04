@@ -571,6 +571,10 @@ async function main() {
     process.env.SEED_TEMPLATE_REPOSITORY_URL?.trim()
     || process.env.TEMPLATE_REPOSITORY_URL?.trim()
     || "https://api.skrivdet.no/api/v1/templates/manifest";
+  const presidioEndpointUrl =
+    process.env.SEED_PRESIDIO_ENDPOINT_URL?.trim()
+    || process.env.PRESIDIO_ENDPOINT_URL?.trim()
+    || "https://kvasetech.com/presidio";
 
   await prisma.adminUser.upsert({
     where: { email: "admin@skrivdet.local" },
@@ -592,7 +596,7 @@ async function main() {
       speechModelName: null,
       privacyControlEnabled: true,
       piiControlEnabled: true,
-      presidioEndpointUrl: "https://presidio.example.internal",
+      presidioEndpointUrl,
       presidioSecretRef: "secret://skrivdet/presidio",
       presidioApiKey: null,
       presidioScoreThreshold: 0.7,
@@ -622,7 +626,7 @@ async function main() {
       speechModelName: null,
       privacyControlEnabled: true,
       piiControlEnabled: true,
-      presidioEndpointUrl: "https://presidio.example.internal",
+      presidioEndpointUrl,
       presidioSecretRef: "secret://skrivdet/presidio",
       presidioApiKey: null,
       presidioScoreThreshold: 0.7,
