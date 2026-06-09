@@ -191,7 +191,7 @@ export default function KeysPage() {
                 actions={<button type="button" className="button" onClick={() => setEnterpriseModalOpen(true)} disabled={!tenants.length || !profiles.length}><KeyRound size={15} /> Generate key</button>}
               />
               {!enterprise.length ? <EmptyState title="No enterprise keys" message="Create a tenant and config profile, then generate an enterprise key." /> : (
-                <div className="table-wrap"><table className="table"><thead><tr><th>Tenant</th><th>Partner</th><th>Prefix</th><th>Status</th><th>Maintenance</th><th>Devices</th><th>Config</th><th className="actions">Actions</th></tr></thead><tbody>{enterprise.map((k) => <tr key={k.id} className="clickable-row" title="Double-click to view license details" onDoubleClick={() => setDetails({ kind: "enterprise", key: k })}><td><b>{k.tenant?.name}</b></td><td>{k.partner?.name ?? <span className="muted">Internal</span>}</td><td>{k.keyPrefix}</td><td><StatusBadge status={k.status} /></td><td>{formatDate(k.maintenanceUntil)}</td><td>{k.activations?.length ?? 0}/{k.maxDevices ?? "unlimited"}</td><td>{k.configProfile?.name}</td><td className="row actions"><IconAction label="View license details" onClick={() => setDetails({ kind: "enterprise", key: k })}><Eye size={14} /></IconAction><IconAction label="Delete key" tone="danger" onClick={() => deleteEnterpriseKey(k)}><Trash2 size={14} /></IconAction></td></tr>)}</tbody></table></div>
+                <div className="table-wrap"><table className="table"><thead><tr><th>Tenant</th><th>Partner</th><th>Prefix</th><th>Status</th><th>Maintenance</th><th>Devices</th><th>Effective config</th><th className="actions">Actions</th></tr></thead><tbody>{enterprise.map((k) => <tr key={k.id} className="clickable-row" title="Double-click to view license details" onDoubleClick={() => setDetails({ kind: "enterprise", key: k })}><td><b>{k.tenant?.name}</b></td><td>{k.partner?.name ?? <span className="muted">Internal</span>}</td><td>{k.keyPrefix}</td><td><StatusBadge status={k.status} /></td><td>{formatDate(k.maintenanceUntil)}</td><td>{k.activations?.length ?? 0}/{k.maxDevices ?? "unlimited"}</td><td>{effectiveEnterpriseConfigProfile(k)?.name ?? "-"}</td><td className="row actions"><IconAction label="View license details" onClick={() => setDetails({ kind: "enterprise", key: k })}><Eye size={14} /></IconAction><IconAction label="Delete key" tone="danger" onClick={() => deleteEnterpriseKey(k)}><Trash2 size={14} /></IconAction></td></tr>)}</tbody></table></div>
               )}
             </div>
             )}
@@ -306,6 +306,8 @@ function SingleLicenseDetails({ licenseKey }: { licenseKey: any }) {
 function EnterpriseLicenseDetails({ licenseKey, onDeleteActivation }: { licenseKey: any; onDeleteActivation: (activation: any) => void }) {
   const activeDevices = licenseKey.activations?.filter((activation: any) => activation.status === "active").length ?? 0;
   const availableDevices = licenseKey.maxDevices ? Math.max(licenseKey.maxDevices - activeDevices, 0) : "unlimited";
+  const effectiveProfile = effectiveEnterpriseConfigProfile(licenseKey);
+  const effectiveSource = licenseKey.tenant?.configProfile ? "Tenant assignment" : "License key fallback";
 
   return (
     <div className="details-stack">
@@ -336,18 +338,21 @@ function EnterpriseLicenseDetails({ licenseKey, onDeleteActivation }: { licenseK
         <Detail label="City" value={licenseKey.tenant?.city} />
         <Detail label="Country" value={licenseKey.tenant?.country} />
       </DetailSection>
-      <DetailSection title="Config profile" description="Central app configuration returned to enterprise devices.">
-        <Detail label="Config ID" value={licenseKey.configProfile?.id} mono wide />
-        <Detail label="Name" value={licenseKey.configProfile?.name} />
-        <Detail label="Speech provider" value={licenseKey.configProfile?.speechProviderType} />
-        <Detail label="Speech model" value={licenseKey.configProfile?.speechModelName} />
-        <Detail label="Formatter" value={licenseKey.configProfile?.documentGenerationProviderType} />
-        <Detail label="Formatter model" value={licenseKey.configProfile?.documentGenerationModel} />
-        <Detail label="Privacy control" value={yesNo(licenseKey.configProfile?.privacyControlEnabled)} />
-        <Detail label="PII control" value={yesNo(licenseKey.configProfile?.piiControlEnabled)} />
-        <Detail label="Privacy review" value={licenseKey.configProfile?.privacyReviewProviderType} />
-        <Detail label="Template repository" value={licenseKey.configProfile?.templateRepositoryUrl} mono full />
-        <Detail label="Telemetry endpoint" value={licenseKey.configProfile?.telemetryEndpointUrl} mono full />
+      <DetailSection title="Effective config profile" description="Central app configuration returned to enterprise devices on activation and refresh.">
+        <Detail label="Source" value={effectiveSource} />
+        <Detail label="Config ID" value={effectiveProfile?.id} mono wide />
+        <Detail label="Name" value={effectiveProfile?.name} />
+        <Detail label="Tenant profile" value={licenseKey.tenant?.configProfile?.name} />
+        <Detail label="Key fallback profile" value={licenseKey.configProfile?.name} />
+        <Detail label="Speech provider" value={effectiveProfile?.speechProviderType} />
+        <Detail label="Speech model" value={effectiveProfile?.speechModelName} />
+        <Detail label="Formatter" value={effectiveProfile?.documentGenerationProviderType} />
+        <Detail label="Formatter model" value={effectiveProfile?.documentGenerationModel} />
+        <Detail label="Privacy control" value={yesNo(effectiveProfile?.privacyControlEnabled)} />
+        <Detail label="PII control" value={yesNo(effectiveProfile?.piiControlEnabled)} />
+        <Detail label="Privacy review" value={effectiveProfile?.privacyReviewProviderType} />
+        <Detail label="Template repository" value={effectiveProfile?.templateRepositoryUrl} mono full />
+        <Detail label="Telemetry endpoint" value={effectiveProfile?.telemetryEndpointUrl} mono full />
       </DetailSection>
       <DetailSection title="Lifecycle" description="Server-side timestamps for generation and record changes.">
         <Detail label="Generated at" value={formatDateTime(licenseKey.generatedAt)} />
@@ -444,4 +449,8 @@ function formatDateTime(value?: string | Date | null) {
 function yesNo(value?: boolean | null) {
   if (value == null) return "-";
   return value ? "Yes" : "No";
+}
+
+function effectiveEnterpriseConfigProfile(licenseKey: any) {
+  return licenseKey?.tenant?.configProfile ?? licenseKey?.configProfile ?? null;
 }

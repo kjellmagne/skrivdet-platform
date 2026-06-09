@@ -280,6 +280,65 @@ describe("ActivationService", () => {
     expect(result.config.providerProfiles.formatter.providers).toHaveLength(1);
   });
 
+  it("uses the tenant assigned profile on enterprise refresh before the original key profile", async () => {
+    prisma.deviceActivation.findUnique.mockResolvedValue({
+      id: "act-current-profile",
+      kind: "enterprise",
+      status: "active",
+      deviceIdentifier: "iphone-current-profile",
+      deviceSerialNumber: null,
+      appVersion: "1.0",
+      activatedAt: new Date("2026-04-29T08:00:00.000Z"),
+      singleLicenseKeyId: null,
+      enterpriseLicenseKeyId: "enterprise-key-current-profile",
+      singleLicenseKey: null,
+      enterpriseLicenseKey: {
+        status: "active",
+        expiresAt: null,
+        maintenanceUntil: null,
+        tenant: {
+          id: "tenant-current-profile",
+          name: "Alta kommune",
+          slug: "alta-kommune",
+          configProfile: {
+            id: "profile-alta",
+            name: "Alta kommune profile",
+            speechProviderType: "azure",
+            documentGenerationProviderType: "openai_compatible",
+            featureFlags: {},
+            allowedProviderRestrictions: [],
+            providerProfiles: {},
+            managedPolicy: {}
+          }
+        },
+        configProfile: {
+          id: "profile-default",
+          name: "Default Enterprise Profile",
+          speechProviderType: "openai",
+          documentGenerationProviderType: "openai_compatible",
+          featureFlags: {},
+          allowedProviderRestrictions: [],
+          providerProfiles: {},
+          managedPolicy: {}
+        }
+      }
+    });
+    prisma.deviceActivation.update.mockResolvedValue({});
+    const activationToken = await issueActivationToken(new JwtService(), {
+      kind: "enterprise",
+      licenseId: "enterprise-key-current-profile",
+      deviceIdentifier: "iphone-current-profile"
+    });
+
+    const result = await service.refresh({ activationToken, deviceIdentifier: "iphone-current-profile", appVersion: "1.1" });
+
+    expect(result.config).toMatchObject({
+      id: "profile-alta",
+      name: "Alta kommune profile",
+      speechProviderType: "azure"
+    });
+  });
+
   it("keeps privacy booleans sparse while managing category catalog by default", async () => {
     prisma.templateCategory.findMany.mockResolvedValue([
       { slug: "personlig_diktat", title: "Personlig diktat", icon: "waveform.and.mic" }

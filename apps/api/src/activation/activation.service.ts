@@ -79,7 +79,7 @@ export class ActivationService {
   async activateEnterprise(input: ActivationInput) {
     const key = await this.prisma.enterpriseLicenseKey.findUnique({
       where: { keyHash: sha256(input.activationKey) },
-      include: { tenant: true, configProfile: true, activations: true }
+      include: { tenant: { include: { configProfile: true } }, configProfile: true, activations: true }
     });
     if (!key) throw new NotFoundException(mobileError("enterprise_key_invalid", "Enterprise key not found"));
     this.assertUsable(key.status, key.expiresAt);
@@ -127,7 +127,7 @@ export class ActivationService {
       license: this.mapEnterpriseLicense(key, activation.activatedAt),
       tenant: this.mapTenant(key.tenant),
       device: this.mapDevice(activation),
-      config: await this.mapConfig(key.configProfile)
+      config: await this.mapConfig(this.effectiveEnterpriseConfigProfile(key))
     };
   }
 
@@ -175,7 +175,8 @@ export class ActivationService {
       appVersion: input.appVersion ?? activation.appVersion,
       deviceSerialNumber: input.deviceSerialNumber ?? activation.deviceSerialNumber
     };
-    const config = activation.enterpriseLicenseKey?.configProfile ? await this.mapConfig(activation.enterpriseLicenseKey.configProfile) : {};
+    const configProfile = this.effectiveEnterpriseConfigProfile(activation.enterpriseLicenseKey);
+    const config = configProfile ? await this.mapConfig(configProfile) : {};
     const tenant = activation.enterpriseLicenseKey?.tenant ? this.mapTenant(activation.enterpriseLicenseKey.tenant) : null;
     return {
       success: true,
@@ -200,7 +201,7 @@ export class ActivationService {
       success: true,
       tenant,
       license: this.mapActivationLicense(activation),
-      config: activation.enterpriseLicenseKey?.configProfile ? await this.mapConfig(activation.enterpriseLicenseKey.configProfile) : {}
+      config: await this.mapEffectiveConfig(activation)
     };
   }
 
@@ -215,7 +216,7 @@ export class ActivationService {
       license: this.mapActivationLicense(activation),
       tenant,
       device: this.mapDevice(activation),
-      config: activation.enterpriseLicenseKey?.configProfile ? await this.mapConfig(activation.enterpriseLicenseKey.configProfile) : {}
+      config: await this.mapEffectiveConfig(activation)
     };
   }
 
@@ -243,7 +244,7 @@ export class ActivationService {
       where: { activationTokenHash: tokenHash(activationToken) },
       include: {
         singleLicenseKey: true,
-        enterpriseLicenseKey: { include: { configProfile: true, tenant: true } },
+        enterpriseLicenseKey: { include: { configProfile: true, tenant: { include: { configProfile: true } } } },
         tenant: true
       }
     });
@@ -343,6 +344,15 @@ export class ActivationService {
       country: tenant.country,
       status: tenant.status
     };
+  }
+
+  private effectiveEnterpriseConfigProfile(enterpriseLicenseKey?: any) {
+    return enterpriseLicenseKey?.tenant?.configProfile ?? enterpriseLicenseKey?.configProfile ?? null;
+  }
+
+  private async mapEffectiveConfig(activation: any) {
+    const configProfile = this.effectiveEnterpriseConfigProfile(activation.enterpriseLicenseKey);
+    return configProfile ? this.mapConfig(configProfile) : {};
   }
 
   private async mapConfig(profile: any) {

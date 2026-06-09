@@ -1094,7 +1094,7 @@ export class AdminController {
     return this.prisma.enterpriseLicenseKey.findMany({
       where: partnerId ? { OR: [{ partnerId }, { tenant: { partnerId } }] } : {},
       orderBy: { createdAt: "desc" },
-      include: { tenant: true, partner: true, configProfile: true, activations: true }
+      include: { tenant: { include: { configProfile: true } }, partner: true, configProfile: true, activations: true }
     });
   }
 

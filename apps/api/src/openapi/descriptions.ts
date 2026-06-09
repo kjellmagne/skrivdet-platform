@@ -175,7 +175,7 @@ const operationDescriptions: Record<string, string> = {
   "POST /api/v1/admin/enterprise-keys": [
     "Generates a display-once enterprise activation key linked to a tenant and config profile.",
     "The backend stores only a key hash/prefix, copies partner ownership from the tenant, applies optional maxDevices and maintenance dates, and returns the full activationKey once.",
-    "Devices activated with this key receive the key/profile effective enterprise policy unless a more specific key profile is configured."
+    "Devices activated with this key receive the tenant/customer assigned config profile on activation and refresh, with the key profile retained as a fallback."
   ].join(" "),
   "DELETE /api/v1/admin/enterprise-keys/{id}": [
     "Permanently deletes an enterprise activation key and registered device activations for that key.",
@@ -196,7 +196,7 @@ const operationDescriptions: Record<string, string> = {
   "PATCH /api/v1/admin/tenants/{id}": [
     "Updates tenant/customer details such as contact information, status, assigned partner and default config profile.",
     "Partner admins can only update tenants inside their partner scope and cannot move a tenant to another partner.",
-    "Changing the tenant config profile changes the fallback effective policy for enterprise keys that do not define their own profile."
+    "Changing the tenant config profile changes the effective policy returned to enterprise devices on their next activation refresh."
   ].join(" "),
   "DELETE /api/v1/admin/tenants/{id}": [
     "Deletes a tenant only when it has no enterprise keys, device activations, tenant-specific templates or template entitlements.",
