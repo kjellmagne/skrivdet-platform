@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Copy, Eye, KeyRound, ShieldCheck, ShieldX, Trash2 } from "lucide-react";
+import { Copy, Eye, KeyRound, Save, ShieldCheck, ShieldX, Trash2 } from "lucide-react";
 import { RequireAuth } from "../../components/RequireAuth";
 import { EmptyState, FieldLabel, FormSection, IconAction, LoadingPanel, PageHeader, PanelHeader, SidePanel, StatusBadge } from "../../components/AdminUI";
 import { getErrorMessage, useToast } from "../../components/ToastProvider";
@@ -30,6 +30,7 @@ export default function KeysPage() {
   const [enterpriseModalOpen, setEnterpriseModalOpen] = useState(false);
   const [details, setDetails] = useState<{ kind: "single" | "enterprise"; key: any } | null>(null);
   const [activeTab, setActiveTab] = useState<KeyTab>("single");
+  const [updatingEnterpriseKey, setUpdatingEnterpriseKey] = useState("");
   const { notify } = useToast();
 
   async function load() {
@@ -116,6 +117,20 @@ export default function KeysPage() {
     }
   }
 
+  async function updateEnterpriseKeyProfile(key: any, configProfileId: string) {
+    setUpdatingEnterpriseKey(key.id);
+    try {
+      const updated = await api(`/admin/enterprise-keys/${key.id}`, { method: "PATCH", body: JSON.stringify({ configProfileId }) });
+      setDetails((current) => current?.kind === "enterprise" && current.key.id === key.id ? { ...current, key: updated } : current);
+      notify({ tone: "success", title: "Enterprise key profile updated", message: "Devices using this key receive the profile on their next refresh." });
+      await load();
+    } catch (err: any) {
+      notify({ tone: "danger", title: "Could not update enterprise key", message: getErrorMessage(err) });
+    } finally {
+      setUpdatingEnterpriseKey("");
+    }
+  }
+
   async function toggleSingleKey(key: any) {
     try {
       await api(`/admin/single-keys/${key.id}/revoke`, { method: "PATCH" });
@@ -191,7 +206,7 @@ export default function KeysPage() {
                 actions={<button type="button" className="button" onClick={() => setEnterpriseModalOpen(true)} disabled={!tenants.length || !profiles.length}><KeyRound size={15} /> Generate key</button>}
               />
               {!enterprise.length ? <EmptyState title="No enterprise keys" message="Create a tenant and config profile, then generate an enterprise key." /> : (
-                <div className="table-wrap"><table className="table"><thead><tr><th>Tenant</th><th>Partner</th><th>Prefix</th><th>Status</th><th>Maintenance</th><th>Devices</th><th>Effective config</th><th className="actions">Actions</th></tr></thead><tbody>{enterprise.map((k) => <tr key={k.id} className="clickable-row" title="Double-click to view license details" onDoubleClick={() => setDetails({ kind: "enterprise", key: k })}><td><b>{k.tenant?.name}</b></td><td>{k.partner?.name ?? <span className="muted">Internal</span>}</td><td>{k.keyPrefix}</td><td><StatusBadge status={k.status} /></td><td>{formatDate(k.maintenanceUntil)}</td><td>{k.activations?.length ?? 0}/{k.maxDevices ?? "unlimited"}</td><td>{effectiveEnterpriseConfigProfile(k)?.name ?? "-"}</td><td className="row actions"><IconAction label="View license details" onClick={() => setDetails({ kind: "enterprise", key: k })}><Eye size={14} /></IconAction><IconAction label="Delete key" tone="danger" onClick={() => deleteEnterpriseKey(k)}><Trash2 size={14} /></IconAction></td></tr>)}</tbody></table></div>
+                <div className="table-wrap"><table className="table"><thead><tr><th>Tenant</th><th>Partner</th><th>Prefix</th><th>Status</th><th>Maintenance</th><th>Devices</th><th>Config profile</th><th className="actions">Actions</th></tr></thead><tbody>{enterprise.map((k) => <tr key={k.id} className="clickable-row" title="Double-click to view license details" onDoubleClick={() => setDetails({ kind: "enterprise", key: k })}><td><b>{k.tenant?.name}</b></td><td>{k.partner?.name ?? <span className="muted">Internal</span>}</td><td>{k.keyPrefix}</td><td><StatusBadge status={k.status} /></td><td>{formatDate(k.maintenanceUntil)}</td><td>{k.activations?.length ?? 0}/{k.maxDevices ?? "unlimited"}</td><td>{effectiveEnterpriseConfigProfile(k)?.name ?? "-"}</td><td className="row actions"><IconAction label="View license details" onClick={() => setDetails({ kind: "enterprise", key: k })}><Eye size={14} /></IconAction><IconAction label="Delete key" tone="danger" onClick={() => deleteEnterpriseKey(k)}><Trash2 size={14} /></IconAction></td></tr>)}</tbody></table></div>
               )}
             </div>
             )}
@@ -260,7 +275,7 @@ export default function KeysPage() {
             onClose={() => setDetails(null)}
           >
             {details?.kind === "single" && <SingleLicenseDetails licenseKey={details.key} />}
-            {details?.kind === "enterprise" && <EnterpriseLicenseDetails licenseKey={details.key} onDeleteActivation={deleteEnterpriseActivation} />}
+            {details?.kind === "enterprise" && <EnterpriseLicenseDetails licenseKey={details.key} profiles={profiles} saving={updatingEnterpriseKey === details.key.id} onProfileChange={updateEnterpriseKeyProfile} onDeleteActivation={deleteEnterpriseActivation} />}
           </SidePanel>
         </>
       )}
@@ -303,11 +318,28 @@ function SingleLicenseDetails({ licenseKey }: { licenseKey: any }) {
   );
 }
 
-function EnterpriseLicenseDetails({ licenseKey, onDeleteActivation }: { licenseKey: any; onDeleteActivation: (activation: any) => void }) {
+function EnterpriseLicenseDetails({
+  licenseKey,
+  profiles,
+  saving,
+  onProfileChange,
+  onDeleteActivation
+}: {
+  licenseKey: any;
+  profiles: any[];
+  saving: boolean;
+  onProfileChange: (licenseKey: any, configProfileId: string) => void;
+  onDeleteActivation: (activation: any) => void;
+}) {
   const activeDevices = licenseKey.activations?.filter((activation: any) => activation.status === "active").length ?? 0;
   const availableDevices = licenseKey.maxDevices ? Math.max(licenseKey.maxDevices - activeDevices, 0) : "unlimited";
   const effectiveProfile = effectiveEnterpriseConfigProfile(licenseKey);
-  const effectiveSource = licenseKey.tenant?.configProfile ? "Tenant assignment" : "License key fallback";
+  const [selectedProfileId, setSelectedProfileId] = useState(licenseKey.configProfileId ?? licenseKey.configProfile?.id ?? "");
+  const profileChanged = selectedProfileId && selectedProfileId !== (licenseKey.configProfileId ?? licenseKey.configProfile?.id ?? "");
+
+  useEffect(() => {
+    setSelectedProfileId(licenseKey.configProfileId ?? licenseKey.configProfile?.id ?? "");
+  }, [licenseKey.configProfileId, licenseKey.configProfile?.id]);
 
   return (
     <div className="details-stack">
@@ -338,12 +370,31 @@ function EnterpriseLicenseDetails({ licenseKey, onDeleteActivation }: { licenseK
         <Detail label="City" value={licenseKey.tenant?.city} />
         <Detail label="Country" value={licenseKey.tenant?.country} />
       </DetailSection>
-      <DetailSection title="Effective config profile" description="Central app configuration returned to enterprise devices on activation and refresh.">
-        <Detail label="Source" value={effectiveSource} />
+      <section className="detail-section">
+        <div className="detail-section-header">
+          <div>
+            <h3>Config profile assignment</h3>
+            <p>Central app configuration returned to devices activated with this enterprise key.</p>
+          </div>
+        </div>
+        <div className="grid two">
+          <div className="field">
+            <FieldLabel>Assigned profile</FieldLabel>
+            <select value={selectedProfileId} onChange={(event) => setSelectedProfileId(event.target.value)} disabled={saving}>
+              {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+            </select>
+          </div>
+          <div className="field" style={{ justifyContent: "end" }}>
+            <FieldLabel>Apply to key</FieldLabel>
+            <button type="button" className="button" disabled={saving || !profileChanged} onClick={() => onProfileChange(licenseKey, selectedProfileId)}>
+              <Save size={16} /> {saving ? "Saving..." : "Save profile"}
+            </button>
+          </div>
+        </div>
+      </section>
+      <DetailSection title="Assigned config profile" description="Current provider and policy summary for this enterprise key.">
         <Detail label="Config ID" value={effectiveProfile?.id} mono wide />
         <Detail label="Name" value={effectiveProfile?.name} />
-        <Detail label="Tenant profile" value={licenseKey.tenant?.configProfile?.name} />
-        <Detail label="Key fallback profile" value={licenseKey.configProfile?.name} />
         <Detail label="Speech provider" value={effectiveProfile?.speechProviderType} />
         <Detail label="Speech model" value={effectiveProfile?.speechModelName} />
         <Detail label="Formatter" value={effectiveProfile?.documentGenerationProviderType} />
@@ -452,5 +503,5 @@ function yesNo(value?: boolean | null) {
 }
 
 function effectiveEnterpriseConfigProfile(licenseKey: any) {
-  return licenseKey?.tenant?.configProfile ?? licenseKey?.configProfile ?? null;
+  return licenseKey?.configProfile ?? null;
 }

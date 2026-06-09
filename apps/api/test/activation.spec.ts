@@ -280,7 +280,7 @@ describe("ActivationService", () => {
     expect(result.config.providerProfiles.formatter.providers).toHaveLength(1);
   });
 
-  it("uses the tenant assigned profile on enterprise refresh before the original key profile", async () => {
+  it("uses the enterprise key assigned profile on enterprise refresh", async () => {
     prisma.deviceActivation.findUnique.mockResolvedValue({
       id: "act-current-profile",
       kind: "enterprise",
@@ -333,9 +333,9 @@ describe("ActivationService", () => {
     const result = await service.refresh({ activationToken, deviceIdentifier: "iphone-current-profile", appVersion: "1.1" });
 
     expect(result.config).toMatchObject({
-      id: "profile-alta",
-      name: "Alta kommune profile",
-      speechProviderType: "azure"
+      id: "profile-default",
+      name: "Default Enterprise Profile",
+      speechProviderType: "openai"
     });
   });
 

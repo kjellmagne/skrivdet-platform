@@ -70,6 +70,13 @@ class EnterpriseKeyDto {
   notes?: string;
 }
 
+class EnterpriseKeyUpdateDto {
+  @ApiProperty({ required: false, example: "config-profile-uuid" })
+  @IsOptional()
+  @IsString()
+  configProfileId?: string;
+}
+
 export class ConfigDto {
   @ApiProperty({ example: "Default Enterprise Profile" })
   @IsString()
@@ -1122,6 +1129,32 @@ export class AdminController {
     });
     await this.audit.log({ actorAdminId: req.user.sub, actorEmail: req.user.email, action: "license.enterprise.generate", targetType: "EnterpriseLicenseKey", targetId: key.id });
     return { ...key, activationKey };
+  }
+
+  @Patch("enterprise-keys/:id")
+  @ApiOperation({ summary: "Update enterprise license key assignment", description: "Updates the config profile assigned to an existing enterprise key. Devices activated with this key receive the new profile on their next activation refresh." })
+  @ApiParam({ name: "id", description: "EnterpriseLicenseKey UUID." })
+  @ApiBody({ type: EnterpriseKeyUpdateDto })
+  @ApiOkResponse({ description: "Enterprise key updated." })
+  async updateEnterpriseKey(@Param("id") id: string, @Body() dto: EnterpriseKeyUpdateDto, @Req() req: any) {
+    await this.assertEnterpriseKeyAccess(req, id);
+    if (dto.configProfileId) await this.assertConfigAccess(req, dto.configProfileId);
+    const key = await this.prisma.enterpriseLicenseKey.update({
+      where: { id },
+      data: {
+        ...(dto.configProfileId ? { configProfileId: dto.configProfileId } : {})
+      },
+      include: { tenant: { include: { configProfile: true } }, partner: true, configProfile: true, activations: true }
+    });
+    await this.audit.log({
+      actorAdminId: req.user.sub,
+      actorEmail: req.user.email,
+      action: "license.enterprise.update",
+      targetType: "EnterpriseLicenseKey",
+      targetId: id,
+      metadata: { configProfileId: dto.configProfileId }
+    });
+    return key;
   }
 
   @Delete("enterprise-keys/:id")

@@ -127,7 +127,7 @@ export class ActivationService {
       license: this.mapEnterpriseLicense(key, activation.activatedAt),
       tenant: this.mapTenant(key.tenant),
       device: this.mapDevice(activation),
-      config: await this.mapConfig(this.effectiveEnterpriseConfigProfile(key))
+      config: await this.mapEffectiveEnterpriseKeyConfig(key)
     };
   }
 
@@ -347,11 +347,16 @@ export class ActivationService {
   }
 
   private effectiveEnterpriseConfigProfile(enterpriseLicenseKey?: any) {
-    return enterpriseLicenseKey?.tenant?.configProfile ?? enterpriseLicenseKey?.configProfile ?? null;
+    return enterpriseLicenseKey?.configProfile ?? enterpriseLicenseKey?.tenant?.configProfile ?? null;
   }
 
   private async mapEffectiveConfig(activation: any) {
     const configProfile = this.effectiveEnterpriseConfigProfile(activation.enterpriseLicenseKey);
+    return configProfile ? this.mapConfig(configProfile) : {};
+  }
+
+  private async mapEffectiveEnterpriseKeyConfig(enterpriseLicenseKey: any) {
+    const configProfile = this.effectiveEnterpriseConfigProfile(enterpriseLicenseKey);
     return configProfile ? this.mapConfig(configProfile) : {};
   }
 
