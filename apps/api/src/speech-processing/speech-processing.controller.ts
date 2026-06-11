@@ -18,7 +18,7 @@ import {
   ApiOperation,
   ApiTags
 } from "@nestjs/swagger";
-import { SpeechProcessingService } from "./speech-processing.service";
+import { SPEECH_UPLOAD_LIMIT_BYTES, SpeechProcessingService } from "./speech-processing.service";
 import { mobileError } from "../activation/activation.service";
 
 @ApiTags("Enterprise Speech Processing")
@@ -30,7 +30,7 @@ export class SpeechProcessingController {
   @Post("jobs")
   @UseInterceptors(FileInterceptor("audio", {
     limits: {
-      fileSize: 100 * 1024 * 1024,
+      fileSize: SPEECH_UPLOAD_LIMIT_BYTES,
       files: 1
     }
   }))

@@ -1,5 +1,10 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
-import { SpeechProcessingService } from "../src/speech-processing/speech-processing.service";
+import {
+  SPEECH_JOB_TTL_MS,
+  SPEECH_MAX_PROCESSING_MS,
+  SPEECH_UPLOAD_LIMIT_BYTES,
+  SpeechProcessingService
+} from "../src/speech-processing/speech-processing.service";
 
 describe("SpeechProcessingService", () => {
   afterEach(() => {
@@ -20,6 +25,12 @@ describe("SpeechProcessingService", () => {
     const form = fetchMock.mock.calls[0][1].body as FormData;
     expect(form.get("response_format")).toBe("json");
     expect(form.has("timestamp_granularities[]")).toBe(false);
+  });
+
+  it("keeps server speech job limits long enough for two-hour processing", () => {
+    expect(SPEECH_MAX_PROCESSING_MS).toBeGreaterThanOrEqual(120 * 60 * 1000);
+    expect(SPEECH_JOB_TTL_MS).toBeGreaterThan(SPEECH_MAX_PROCESSING_MS);
+    expect(SPEECH_UPLOAD_LIMIT_BYTES).toBeGreaterThanOrEqual(512 * 1024 * 1024);
   });
 
   it("falls back to json when an OpenAI-compatible provider rejects verbose_json", async () => {

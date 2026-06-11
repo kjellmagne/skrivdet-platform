@@ -56,7 +56,10 @@ type SpeechProviderProfile = {
   serverProcessingEndpointUrl?: string | null;
 };
 
-const JOB_TTL_MS = 15 * 60 * 1000;
+export const SPEECH_JOB_TTL_MS = 3 * 60 * 60 * 1000;
+export const SPEECH_MAX_PROCESSING_MS = 150 * 60 * 1000;
+export const SPEECH_UPLOAD_LIMIT_BYTES = 512 * 1024 * 1024;
+const SPEECH_JOB_CLEANUP_MARGIN_MS = 5 * 60 * 1000;
 const OPENAI_DEFAULT_ENDPOINT = "https://api.openai.com/v1";
 const OPENAI_DEFAULT_MODEL = "gpt-4o-transcribe";
 const SPEECH_TICKS_PER_SECOND = 10_000_000;
@@ -295,14 +298,14 @@ export class SpeechProcessingService {
     setTimeout(() => {
       const job = this.jobs.get(jobId);
       if (!job) return;
-      if (Date.now() - job.updatedAt >= JOB_TTL_MS) {
+      if (Date.now() - job.updatedAt >= SPEECH_JOB_TTL_MS) {
         this.jobs.delete(jobId);
       }
-    }, JOB_TTL_MS).unref?.();
+    }, SPEECH_JOB_TTL_MS).unref?.();
   }
 
   private purgeExpiredJobs() {
-    const cutoff = Date.now() - JOB_TTL_MS;
+    const cutoff = Date.now() - SPEECH_JOB_TTL_MS;
     for (const [id, job] of this.jobs.entries()) {
       if (job.updatedAt < cutoff) {
         this.jobs.delete(id);
@@ -421,7 +424,8 @@ function recognizeAzureFile(
 ) {
   return new Promise<void>((resolve, reject) => {
     let settled = false;
-    const timeoutMs = Math.min(Math.max((duration * 4 + 120) * 1000, 60_000), JOB_TTL_MS - 30_000);
+    const durationScaledTimeoutMs = Math.max((duration * 4 + 120) * 1000, 60_000);
+    const timeoutMs = Math.min(durationScaledTimeoutMs, SPEECH_MAX_PROCESSING_MS, SPEECH_JOB_TTL_MS - SPEECH_JOB_CLEANUP_MARGIN_MS);
     const timeout = setTimeout(() => {
       finish(new Error("Azure speech processing timed out"));
     }, timeoutMs);
