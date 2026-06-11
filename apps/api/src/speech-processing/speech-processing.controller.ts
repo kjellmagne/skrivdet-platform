@@ -19,6 +19,7 @@ import {
   ApiTags
 } from "@nestjs/swagger";
 import { SpeechProcessingService } from "./speech-processing.service";
+import { mobileError } from "../activation/activation.service";
 
 @ApiTags("Enterprise Speech Processing")
 @ApiBearerAuth()
@@ -87,7 +88,7 @@ export class SpeechProcessingController {
   private bearerToken(authorization: string | undefined) {
     const [scheme, token] = (authorization || "").split(" ");
     if (scheme !== "Bearer" || !token) {
-      throw new BadRequestException({ success: false, error: { code: "activation_token_required", message: "Authorization bearer token is required" } });
+      throw new BadRequestException(mobileError("activation_token_required", "Enterprise activation token is missing. Refresh the license in the app and try again."));
     }
     return token;
   }

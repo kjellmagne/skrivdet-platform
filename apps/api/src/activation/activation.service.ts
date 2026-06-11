@@ -493,7 +493,7 @@ export class ActivationService {
 
 class UnauthorizedActivation extends ForbiddenException {
   constructor() {
-    super(mobileError("activation_token_invalid", "Invalid activation token"));
+    super(mobileError("activation_token_invalid", "Activation token is invalid or expired. Refresh the enterprise license and try again."));
   }
 }
 
