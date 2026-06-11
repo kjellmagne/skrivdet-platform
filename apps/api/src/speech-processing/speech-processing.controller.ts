@@ -59,11 +59,12 @@ export class SpeechProcessingController {
     @UploadedFile() file: any,
     @Body() body: Record<string, string>
   ) {
+    const activationToken = this.bearerToken(authorization);
     if (!file?.buffer?.length) {
       throw new BadRequestException({ success: false, error: { code: "audio_required", message: "Audio file is required" } });
     }
 
-    return this.speechProcessing.createJob(this.bearerToken(authorization), {
+    return this.speechProcessing.createJob(activationToken, {
       audioBuffer: file.buffer,
       filename: file.originalname || "recording.m4a",
       mimeType: file.mimetype || "application/octet-stream",
