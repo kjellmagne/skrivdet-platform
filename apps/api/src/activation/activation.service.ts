@@ -220,13 +220,46 @@ export class ActivationService {
     };
   }
 
-  async assertEnterpriseActivationToken(activationToken: string) {
-    const activation = await this.findActivationByToken(activationToken);
+  async assertEnterpriseActivationToken(activationToken: string, options: { allowRotatedToken?: boolean } = {}) {
+    const activation = options.allowRotatedToken
+      ? await this.findActivationByTokenOrClaims(activationToken)
+      : await this.findActivationByToken(activationToken);
     this.assertUsable(activation.status, null);
     this.assertActivationLicenseUsable(activation);
     if (activation.kind !== "enterprise" || !activation.enterpriseLicenseKey?.configProfile || !activation.tenantId) {
       throw new ForbiddenException(mobileError("enterprise_activation_required", "Enterprise activation is required"));
     }
+    return activation;
+  }
+
+  private async findActivationByTokenOrClaims(activationToken: string) {
+    try {
+      return await this.findActivationByToken(activationToken);
+    } catch (error) {
+      if (!(error instanceof UnauthorizedActivation)) throw error;
+    }
+
+    let claims;
+    try {
+      claims = await verifyActivationToken(this.jwt, activationToken);
+    } catch {
+      throw new UnauthorizedActivation();
+    }
+
+    if (claims.kind !== "enterprise") throw new UnauthorizedActivation();
+    const activation = await this.prisma.deviceActivation.findFirst({
+      where: {
+        kind: "enterprise",
+        enterpriseLicenseKeyId: claims.licenseId,
+        deviceIdentifier: claims.deviceIdentifier
+      },
+      include: {
+        singleLicenseKey: true,
+        enterpriseLicenseKey: { include: { configProfile: true, tenant: { include: { configProfile: true } } } },
+        tenant: true
+      }
+    });
+    if (!activation) throw new UnauthorizedActivation();
     return activation;
   }
 

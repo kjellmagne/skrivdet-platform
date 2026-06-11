@@ -96,7 +96,7 @@ export class SpeechProcessingService {
   }
 
   async jobStatus(activationToken: string, jobId: string) {
-    const activation = await this.activationService.assertEnterpriseActivationToken(activationToken);
+    const activation = await this.activationService.assertEnterpriseActivationToken(activationToken, { allowRotatedToken: true });
     this.purgeExpiredJobs();
     const job = this.jobs.get(jobId);
     if (!job) {

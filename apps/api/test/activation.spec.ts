@@ -26,6 +26,7 @@ describe("ActivationService", () => {
       deviceActivation: {
         upsert: vi.fn(),
         findUnique: vi.fn(),
+        findFirst: vi.fn(),
         update: vi.fn()
       },
       templateCategory: {
@@ -337,6 +338,47 @@ describe("ActivationService", () => {
       name: "Default Enterprise Profile",
       speechProviderType: "openai"
     });
+  });
+
+  it("can resolve a rotated enterprise activation token for in-flight speech jobs", async () => {
+    const activationToken = await issueActivationToken(new JwtService(), {
+      kind: "enterprise",
+      licenseId: "enterprise-key-rotated",
+      deviceIdentifier: "iphone-rotated"
+    });
+    prisma.deviceActivation.findUnique.mockResolvedValue(null);
+    prisma.deviceActivation.findFirst.mockResolvedValue({
+      id: "act-rotated",
+      kind: "enterprise",
+      status: "active",
+      tenantId: "tenant-rotated",
+      deviceIdentifier: "iphone-rotated",
+      enterpriseLicenseKeyId: "enterprise-key-rotated",
+      singleLicenseKey: null,
+      enterpriseLicenseKey: {
+        status: "active",
+        expiresAt: null,
+        tenant: { id: "tenant-rotated", name: "Rotated Health", slug: "rotated-health" },
+        configProfile: {
+          id: "profile-rotated",
+          name: "Rotated profile",
+          featureFlags: {},
+          allowedProviderRestrictions: [],
+          providerProfiles: {},
+          managedPolicy: {}
+        }
+      }
+    });
+
+    const activation = await service.assertEnterpriseActivationToken(activationToken, { allowRotatedToken: true });
+
+    expect(activation.id).toBe("act-rotated");
+    expect(prisma.deviceActivation.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        enterpriseLicenseKeyId: "enterprise-key-rotated",
+        deviceIdentifier: "iphone-rotated"
+      })
+    }));
   });
 
   it("keeps privacy booleans sparse while managing category catalog by default", async () => {
