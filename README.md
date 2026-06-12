@@ -230,6 +230,7 @@ Config profiles keep provider domains separate:
 - Presidio PII is configured separately from privacy review
 - Optional managed provider credentials are `speechApiKey` and `documentGenerationApiKey`. Prefer internal gateway endpoints or tenant-scoped keys when these fields are sent to mobile devices.
 - The admin UI defaults Azure Speech to `https://kvasetech.com/stt`, Ollama/OpenAI-compatible formatter endpoints to `https://kvasetech.com/ollama`, and OpenAI formatter to `https://api.openai.com/v1` with `gpt-5-mini`. Ollama and OpenAI-compatible models are intentionally left blank until selected from the fetched model list or typed manually.
+- The local AI server also exposes vLLM as an OpenAI-compatible endpoint at `http://192.168.222.171:8000/v1`. The currently served model id is `gemma-4-26b-a4b-it`; configure it as `openai_compatible` in provider profiles.
 
 Leave provider fields blank when the backend should not manage that setting for the tenant.
 
