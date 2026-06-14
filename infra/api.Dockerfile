@@ -15,7 +15,7 @@ RUN pnpm prisma:generate && pnpm --filter @skrivdet/contracts build && pnpm --fi
 FROM node:22-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-RUN corepack enable
+RUN apk add --no-cache ffmpeg && corepack enable
 COPY --from=build /app/package.json /app/pnpm-workspace.yaml ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/apps/api/package.json ./apps/api/package.json

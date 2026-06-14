@@ -1,6 +1,11 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { execFile } from "child_process";
 import { randomUUID } from "crypto";
+import { mkdir, readFile, rm, writeFile } from "fs/promises";
 import * as SpeechSDK from "microsoft-cognitiveservices-speech-sdk";
+import { tmpdir } from "os";
+import { basename, extname, join } from "path";
+import { promisify } from "util";
 import { ActivationService, mobileError } from "../activation/activation.service";
 import { decryptConfigProfileSecrets } from "../common/secret-crypto";
 
@@ -62,9 +67,21 @@ export const SPEECH_UPLOAD_LIMIT_BYTES = 512 * 1024 * 1024;
 const SPEECH_JOB_CLEANUP_MARGIN_MS = 5 * 60 * 1000;
 const OPENAI_DEFAULT_ENDPOINT = "https://api.openai.com/v1";
 const OPENAI_DEFAULT_MODEL = "gpt-4o-transcribe";
+export const OPENAI_TRANSCRIBE_MAX_DURATION_SECONDS = 1_400;
+const OPENAI_TRANSCRIBE_CHUNK_SECONDS = 1_200;
 const SPEECH_TICKS_PER_SECOND = 10_000_000;
 const AZURE_STANDARD_RECOGNITION_PATH = "/speech/recognition/conversation/cognitiveservices/v1";
 type OpenAiTranscriptionResponseFormat = "json" | "verbose_json";
+const execFileAsync = promisify(execFile);
+
+type AudioChunk = {
+  index: number;
+  buffer: Buffer;
+  filename: string;
+  mimeType: string;
+  startTime: number;
+  durationSeconds: number;
+};
 
 @Injectable()
 export class SpeechProcessingService {
@@ -176,12 +193,16 @@ export class SpeechProcessingService {
     const apiKey = stringValue(providerProfile.apiKey);
     const modelName = stringValue(input.modelName) ?? stringValue(providerProfile.modelName) ?? OPENAI_DEFAULT_MODEL;
     const requestUrl = transcriptionUrl(endpointUrl);
+    const duration = Math.max(Number(input.durationSeconds || 1), 1);
 
     if (!apiKey) {
       throw new BadRequestException(mobileError("speech_api_key_required", "Managed speech provider API key is required for server processing"));
     }
 
     const preferredFormat = openAiTranscriptionResponseFormat(modelName);
+    if (shouldChunkOpenAiTranscription(modelName, duration)) {
+      return this.transcribeOpenAICompatibleChunks(input, requestUrl, apiKey, modelName, preferredFormat, duration, progress);
+    }
 
     progress(30, "Uploading audio from isolated server to speech provider.");
     progress(55, "Provider is transcribing the recording.");
@@ -207,6 +228,74 @@ export class SpeechProcessingService {
       sourceEngine: `Server speech processing (${modelName})`,
       segments,
       previewText: text
+    };
+  }
+
+  private async transcribeOpenAICompatibleChunks(
+    input: CreateSpeechJobInput,
+    requestUrl: string,
+    apiKey: string,
+    modelName: string,
+    preferredFormat: OpenAiTranscriptionResponseFormat,
+    duration: number,
+    progress: (percent: number, message: string) => void
+  ): Promise<TranscriptPayload> {
+    progress(25, "Preparing long recording for speech provider.");
+    const chunks = await splitAudioForOpenAi(input, duration);
+    const segments: TranscriptSegment[] = [];
+    const texts: string[] = [];
+
+    for (const chunk of chunks) {
+      const chunkNumber = chunk.index + 1;
+      const chunkLabel = `${chunkNumber}/${chunks.length}`;
+      const basePercent = 30 + (chunk.index / chunks.length) * 55;
+      progress(basePercent, `Uploading audio chunk ${chunkLabel} to speech provider.`);
+      const chunkInput = {
+        ...input,
+        audioBuffer: chunk.buffer,
+        filename: chunk.filename,
+        mimeType: chunk.mimeType,
+        durationSeconds: chunk.durationSeconds
+      };
+
+      let { response, data } = await requestOpenAiTranscription(requestUrl, apiKey, chunkInput, modelName, preferredFormat);
+      if (!response.ok && preferredFormat === "verbose_json" && isResponseFormatCompatibilityError(data)) {
+        ({ response, data } = await requestOpenAiTranscription(requestUrl, apiKey, chunkInput, modelName, "json"));
+      }
+
+      if (!response.ok) {
+        const detail = data?.error?.message || data?.message || response.statusText || "Speech provider request failed";
+        throw new BadRequestException(mobileError("speech_provider_failed", String(detail)));
+      }
+
+      const text = stringValue(data?.text) ?? "";
+      if (!text) {
+        throw new BadRequestException(mobileError("empty_transcript", `Speech provider returned an empty transcript for chunk ${chunkLabel}`));
+      }
+
+      texts.push(text);
+      segments.push(
+        ...transcriptSegments(data, text, chunk.durationSeconds).map((segment) => ({
+          ...segment,
+          id: randomUUID(),
+          startTime: chunk.startTime + segment.startTime,
+          endTime: chunk.startTime + segment.endTime
+        }))
+      );
+      progress(30 + ((chunk.index + 1) / chunks.length) * 55, `Speech provider finished chunk ${chunkLabel}.`);
+    }
+
+    progress(88, "Combining speech transcription chunks.");
+    const previewText = texts.join("\n\n").trim();
+    if (!previewText) {
+      throw new BadRequestException(mobileError("empty_transcript", "Speech provider returned an empty transcript"));
+    }
+
+    return {
+      languageCode: input.languageCode || "und",
+      sourceEngine: `Server speech processing (${modelName})`,
+      segments: segments.length ? segments : transcriptSegments(null, previewText, duration),
+      previewText
     };
   }
 
@@ -366,6 +455,84 @@ function openAiTranscriptionResponseFormat(modelName: string): OpenAiTranscripti
     return "json";
   }
   return "verbose_json";
+}
+
+export function shouldChunkOpenAiTranscription(modelName: string, durationSeconds?: number | null) {
+  const duration = Number(durationSeconds || 0);
+  if (!Number.isFinite(duration) || duration <= OPENAI_TRANSCRIBE_MAX_DURATION_SECONDS) {
+    return false;
+  }
+
+  const normalized = modelName.trim().toLowerCase();
+  return normalized.includes("gpt-4o-transcribe") || normalized.includes("gpt-4o-mini-transcribe");
+}
+
+async function splitAudioForOpenAi(input: CreateSpeechJobInput, duration: number): Promise<AudioChunk[]> {
+  const workDir = join(tmpdir(), `skrivdet-speech-${randomUUID()}`);
+  await mkdir(workDir, { recursive: true });
+  const sourceExtension = normalizedAudioExtension(input.filename);
+  const sourcePath = join(workDir, `source${sourceExtension}`);
+  const outputPattern = join(workDir, "chunk-%03d.wav");
+
+  try {
+    await writeFile(sourcePath, input.audioBuffer);
+    await execFileAsync("ffmpeg", [
+      "-hide_banner",
+      "-loglevel", "error",
+      "-y",
+      "-i", sourcePath,
+      "-map", "0:a:0",
+      "-f", "segment",
+      "-segment_time", String(OPENAI_TRANSCRIBE_CHUNK_SECONDS),
+      "-reset_timestamps", "1",
+      "-ac", "1",
+      "-ar", "16000",
+      "-c:a", "pcm_s16le",
+      outputPattern
+    ], { timeout: 20 * 60 * 1000 });
+
+    const chunks: AudioChunk[] = [];
+    const expectedChunkCount = Math.ceil(duration / OPENAI_TRANSCRIBE_CHUNK_SECONDS);
+    for (let index = 0; index < expectedChunkCount; index += 1) {
+      const filename = `chunk-${String(index).padStart(3, "0")}.wav`;
+      const chunkPath = join(workDir, filename);
+      let buffer: Buffer;
+      try {
+        buffer = await readFile(chunkPath);
+      } catch {
+        break;
+      }
+
+      const startTime = index * OPENAI_TRANSCRIBE_CHUNK_SECONDS;
+      chunks.push({
+        index,
+        buffer,
+        filename,
+        mimeType: "audio/wav",
+        startTime,
+        durationSeconds: Math.max(Math.min(OPENAI_TRANSCRIBE_CHUNK_SECONDS, duration - startTime), 0.1)
+      });
+    }
+
+    if (!chunks.length) {
+      throw new Error("ffmpeg did not produce audio chunks");
+    }
+
+    return chunks;
+  } catch (error) {
+    throw new BadRequestException(mobileError("speech_preprocessing_failed", `Could not prepare long recording for OpenAI speech processing: ${userErrorMessage(error)}`));
+  } finally {
+    await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+function normalizedAudioExtension(filename: string) {
+  const extension = extname(basename(filename)).toLowerCase();
+  if (/^\.[a-z0-9]{1,8}$/.test(extension)) {
+    return extension;
+  }
+
+  return ".audio";
 }
 
 function isResponseFormatCompatibilityError(data: any) {

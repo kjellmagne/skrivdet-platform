@@ -1,9 +1,11 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import {
+  OPENAI_TRANSCRIBE_MAX_DURATION_SECONDS,
   SPEECH_JOB_TTL_MS,
   SPEECH_MAX_PROCESSING_MS,
   SPEECH_UPLOAD_LIMIT_BYTES,
-  SpeechProcessingService
+  SpeechProcessingService,
+  shouldChunkOpenAiTranscription
 } from "../src/speech-processing/speech-processing.service";
 
 describe("SpeechProcessingService", () => {
@@ -31,6 +33,13 @@ describe("SpeechProcessingService", () => {
     expect(SPEECH_MAX_PROCESSING_MS).toBeGreaterThanOrEqual(120 * 60 * 1000);
     expect(SPEECH_JOB_TTL_MS).toBeGreaterThan(SPEECH_MAX_PROCESSING_MS);
     expect(SPEECH_UPLOAD_LIMIT_BYTES).toBeGreaterThanOrEqual(512 * 1024 * 1024);
+  });
+
+  it("chunks long OpenAI transcription jobs instead of sending unsupported full-duration requests", () => {
+    expect(shouldChunkOpenAiTranscription("gpt-4o-transcribe", OPENAI_TRANSCRIBE_MAX_DURATION_SECONDS + 1)).toBe(true);
+    expect(shouldChunkOpenAiTranscription("gpt-4o-mini-transcribe", 2 * 60 * 60)).toBe(true);
+    expect(shouldChunkOpenAiTranscription("gpt-4o-transcribe", OPENAI_TRANSCRIBE_MAX_DURATION_SECONDS)).toBe(false);
+    expect(shouldChunkOpenAiTranscription("whisper-1", 2 * 60 * 60)).toBe(false);
   });
 
   it("falls back to json when an OpenAI-compatible provider rejects verbose_json", async () => {
