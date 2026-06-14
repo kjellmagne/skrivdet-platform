@@ -69,6 +69,8 @@ const OPENAI_DEFAULT_ENDPOINT = "https://api.openai.com/v1";
 const OPENAI_DEFAULT_MODEL = "gpt-4o-transcribe";
 export const OPENAI_TRANSCRIBE_MAX_DURATION_SECONDS = 1_400;
 const OPENAI_TRANSCRIBE_CHUNK_SECONDS = 1_200;
+export const AZURE_TRANSCRIBE_CHUNK_SECONDS = 600;
+export const AZURE_TRANSCRIBE_PARALLEL_CHUNKS = 3;
 const SPEECH_TICKS_PER_SECOND = 10_000_000;
 const AZURE_STANDARD_RECOGNITION_PATH = "/speech/recognition/conversation/cognitiveservices/v1";
 type OpenAiTranscriptionResponseFormat = "json" | "verbose_json";
@@ -241,7 +243,7 @@ export class SpeechProcessingService {
     progress: (percent: number, message: string) => void
   ): Promise<TranscriptPayload> {
     progress(25, "Preparing long recording for speech provider.");
-    const chunks = await splitAudioForOpenAi(input, duration);
+    const chunks = await splitAudioForSpeech(input, duration, OPENAI_TRANSCRIBE_CHUNK_SECONDS, "OpenAI speech processing");
     const segments: TranscriptSegment[] = [];
     const texts: string[] = [];
 
@@ -309,8 +311,101 @@ export class SpeechProcessingService {
       throw new BadRequestException(mobileError("speech_endpoint_required", "Managed Azure speech endpoint is required for server processing"));
     }
 
-    progress(30, "Streaming prepared audio to Azure speech endpoint.");
     const duration = Math.max(Number(input.durationSeconds || 1), 1);
+    if (shouldChunkAzureTranscription(duration)) {
+      return this.transcribeAzureChunks(input, endpointUrl, providerProfile, duration, progress);
+    }
+
+    progress(30, "Streaming prepared audio to Azure speech endpoint.");
+    const segments = await this.transcribeAzureChunk(input, endpointUrl, providerProfile, duration, (ratio) => {
+      progress(45 + ratio * 40, "Azure is transcribing the recording.");
+    });
+
+    progress(88, "Reading Azure transcription result.");
+    const text = segments.map((segment) => segment.text).join(" ").trim();
+
+    if (!text) {
+      throw new BadRequestException(mobileError("empty_transcript", "Azure speech returned an empty transcript"));
+    }
+
+    return {
+      languageCode: input.languageCode || "und",
+      sourceEngine: "Server speech processing (Azure Speech)",
+      segments: segments.length ? segments : transcriptSegments(null, text, duration),
+      previewText: text
+    };
+  }
+
+  private async transcribeAzureChunks(
+    input: CreateSpeechJobInput,
+    endpointUrl: string,
+    providerProfile: SpeechProviderProfile,
+    duration: number,
+    progress: (percent: number, message: string) => void
+  ): Promise<TranscriptPayload> {
+    progress(25, "Preparing long recording for Microsoft speech processing.");
+    const chunks = await splitAudioForSpeech(input, duration, AZURE_TRANSCRIBE_CHUNK_SECONDS, "Microsoft speech processing");
+    const results = await mapWithConcurrency(chunks, AZURE_TRANSCRIBE_PARALLEL_CHUNKS, async (chunk) => {
+      const chunkNumber = chunk.index + 1;
+      const chunkLabel = `${chunkNumber}/${chunks.length}`;
+      progress(30 + (chunk.index / chunks.length) * 55, `Sending audio chunk ${chunkLabel} to Microsoft STT.`);
+      const chunkInput = {
+        ...input,
+        audioBuffer: chunk.buffer,
+        filename: chunk.filename,
+        mimeType: chunk.mimeType,
+        durationSeconds: chunk.durationSeconds
+      };
+      const segments = await this.transcribeAzureChunk(
+        chunkInput,
+        endpointUrl,
+        providerProfile,
+        chunk.durationSeconds,
+        (ratio) => {
+          progress(
+            30 + ((chunk.index + ratio) / chunks.length) * 55,
+            `Microsoft STT is transcribing chunk ${chunkLabel}.`
+          );
+        }
+      );
+      progress(30 + ((chunk.index + 1) / chunks.length) * 55, `Microsoft STT finished chunk ${chunkLabel}.`);
+
+      return {
+        index: chunk.index,
+        text: segments.map((segment) => segment.text).join(" ").trim(),
+        segments: segments.map((segment) => ({
+          ...segment,
+          id: randomUUID(),
+          startTime: chunk.startTime + segment.startTime,
+          endTime: chunk.startTime + segment.endTime
+        }))
+      };
+    });
+
+    progress(88, "Combining Microsoft speech transcription chunks.");
+    const orderedResults = results.sort((left, right) => left.index - right.index);
+    const segments = orderedResults.flatMap((result) => result.segments);
+    const previewText = orderedResults.map((result) => result.text).filter(Boolean).join("\n\n").trim();
+
+    if (!previewText) {
+      throw new BadRequestException(mobileError("empty_transcript", "Azure speech returned an empty transcript"));
+    }
+
+    return {
+      languageCode: input.languageCode || "und",
+      sourceEngine: "Server speech processing (Azure Speech)",
+      segments: segments.length ? segments : transcriptSegments(null, previewText, duration),
+      previewText
+    };
+  }
+
+  private async transcribeAzureChunk(
+    input: CreateSpeechJobInput,
+    endpointUrl: string,
+    providerProfile: SpeechProviderProfile,
+    duration: number,
+    progress: (ratio: number) => void
+  ): Promise<TranscriptSegment[]> {
     const speechConfig = azureSpeechConfig(endpointUrl, providerProfile.apiKey, input.languageCode);
     speechConfig.speechRecognitionLanguage = input.languageCode || "nb-NO";
     speechConfig.outputFormat = SpeechSDK.OutputFormat.Detailed;
@@ -327,7 +422,7 @@ export class SpeechProcessingService {
         if (!segment) return;
         segments.push(segment);
         const endRatio = Math.min(segment.endTime / duration, 1);
-        progress(45 + endRatio * 40, "Azure is transcribing the recording.");
+        progress(endRatio);
       });
     } catch (error) {
       throw new BadRequestException(mobileError("speech_provider_failed", userErrorMessage(error)));
@@ -336,19 +431,7 @@ export class SpeechProcessingService {
       audioConfig.close();
     }
 
-    progress(88, "Reading Azure transcription result.");
-    const text = segments.map((segment) => segment.text).join(" ").trim();
-
-    if (!text) {
-      throw new BadRequestException(mobileError("empty_transcript", "Azure speech returned an empty transcript"));
-    }
-
-    return {
-      languageCode: input.languageCode || "und",
-      sourceEngine: "Server speech processing (Azure Speech)",
-      segments: segments.length ? segments : transcriptSegments(null, text, duration),
-      previewText: text
-    };
+    return segments;
   }
 
   private updateJob(jobId: string, percent: number, message: string) {
@@ -467,7 +550,17 @@ export function shouldChunkOpenAiTranscription(modelName: string, durationSecond
   return normalized.includes("gpt-4o-transcribe") || normalized.includes("gpt-4o-mini-transcribe");
 }
 
-async function splitAudioForOpenAi(input: CreateSpeechJobInput, duration: number): Promise<AudioChunk[]> {
+export function shouldChunkAzureTranscription(durationSeconds?: number | null) {
+  const duration = Number(durationSeconds || 0);
+  return Number.isFinite(duration) && duration > AZURE_TRANSCRIBE_CHUNK_SECONDS;
+}
+
+async function splitAudioForSpeech(
+  input: CreateSpeechJobInput,
+  duration: number,
+  chunkSeconds: number,
+  purpose: string
+): Promise<AudioChunk[]> {
   const workDir = join(tmpdir(), `skrivdet-speech-${randomUUID()}`);
   await mkdir(workDir, { recursive: true });
   const sourceExtension = normalizedAudioExtension(input.filename);
@@ -483,7 +576,7 @@ async function splitAudioForOpenAi(input: CreateSpeechJobInput, duration: number
       "-i", sourcePath,
       "-map", "0:a:0",
       "-f", "segment",
-      "-segment_time", String(OPENAI_TRANSCRIBE_CHUNK_SECONDS),
+      "-segment_time", String(chunkSeconds),
       "-reset_timestamps", "1",
       "-ac", "1",
       "-ar", "16000",
@@ -492,7 +585,7 @@ async function splitAudioForOpenAi(input: CreateSpeechJobInput, duration: number
     ], { timeout: 20 * 60 * 1000 });
 
     const chunks: AudioChunk[] = [];
-    const expectedChunkCount = Math.ceil(duration / OPENAI_TRANSCRIBE_CHUNK_SECONDS);
+    const expectedChunkCount = Math.ceil(duration / chunkSeconds);
     for (let index = 0; index < expectedChunkCount; index += 1) {
       const filename = `chunk-${String(index).padStart(3, "0")}.wav`;
       const chunkPath = join(workDir, filename);
@@ -503,14 +596,14 @@ async function splitAudioForOpenAi(input: CreateSpeechJobInput, duration: number
         break;
       }
 
-      const startTime = index * OPENAI_TRANSCRIBE_CHUNK_SECONDS;
+      const startTime = index * chunkSeconds;
       chunks.push({
         index,
         buffer,
         filename,
         mimeType: "audio/wav",
         startTime,
-        durationSeconds: Math.max(Math.min(OPENAI_TRANSCRIBE_CHUNK_SECONDS, duration - startTime), 0.1)
+        durationSeconds: Math.max(Math.min(chunkSeconds, duration - startTime), 0.1)
       });
     }
 
@@ -520,10 +613,31 @@ async function splitAudioForOpenAi(input: CreateSpeechJobInput, duration: number
 
     return chunks;
   } catch (error) {
-    throw new BadRequestException(mobileError("speech_preprocessing_failed", `Could not prepare long recording for OpenAI speech processing: ${userErrorMessage(error)}`));
+    throw new BadRequestException(mobileError("speech_preprocessing_failed", `Could not prepare long recording for ${purpose}: ${userErrorMessage(error)}`));
   } finally {
     await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
   }
+}
+
+async function mapWithConcurrency<T, R>(
+  values: T[],
+  concurrency: number,
+  worker: (value: T) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(values.length);
+  let nextIndex = 0;
+  const workerCount = Math.max(Math.min(Math.floor(concurrency), values.length), 1);
+
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= values.length) return;
+      results[index] = await worker(values[index]);
+    }
+  }));
+
+  return results;
 }
 
 function normalizedAudioExtension(filename: string) {

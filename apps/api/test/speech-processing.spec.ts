@@ -1,10 +1,12 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import {
+  AZURE_TRANSCRIBE_CHUNK_SECONDS,
   OPENAI_TRANSCRIBE_MAX_DURATION_SECONDS,
   SPEECH_JOB_TTL_MS,
   SPEECH_MAX_PROCESSING_MS,
   SPEECH_UPLOAD_LIMIT_BYTES,
   SpeechProcessingService,
+  shouldChunkAzureTranscription,
   shouldChunkOpenAiTranscription
 } from "../src/speech-processing/speech-processing.service";
 
@@ -40,6 +42,12 @@ describe("SpeechProcessingService", () => {
     expect(shouldChunkOpenAiTranscription("gpt-4o-mini-transcribe", 2 * 60 * 60)).toBe(true);
     expect(shouldChunkOpenAiTranscription("gpt-4o-transcribe", OPENAI_TRANSCRIBE_MAX_DURATION_SECONDS)).toBe(false);
     expect(shouldChunkOpenAiTranscription("whisper-1", 2 * 60 * 60)).toBe(false);
+  });
+
+  it("chunks long Microsoft on-prem speech jobs for batch-style processing", () => {
+    expect(shouldChunkAzureTranscription(AZURE_TRANSCRIBE_CHUNK_SECONDS + 1)).toBe(true);
+    expect(shouldChunkAzureTranscription(2 * 60 * 60)).toBe(true);
+    expect(shouldChunkAzureTranscription(AZURE_TRANSCRIBE_CHUNK_SECONDS)).toBe(false);
   });
 
   it("falls back to json when an OpenAI-compatible provider rejects verbose_json", async () => {
