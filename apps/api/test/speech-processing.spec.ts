@@ -6,6 +6,7 @@ import {
   SPEECH_MAX_PROCESSING_MS,
   SPEECH_UPLOAD_LIMIT_BYTES,
   SpeechProcessingService,
+  chunkedProgressPercent,
   shouldChunkAzureTranscription,
   shouldChunkOpenAiTranscription
 } from "../src/speech-processing/speech-processing.service";
@@ -48,6 +49,44 @@ describe("SpeechProcessingService", () => {
     expect(shouldChunkAzureTranscription(AZURE_TRANSCRIBE_CHUNK_SECONDS + 1)).toBe(true);
     expect(shouldChunkAzureTranscription(2 * 60 * 60)).toBe(true);
     expect(shouldChunkAzureTranscription(AZURE_TRANSCRIBE_CHUNK_SECONDS)).toBe(false);
+  });
+
+  it("calculates Microsoft chunk progress from aggregate work instead of chunk order", () => {
+    const ratios = [0, 0, 0, 0];
+    const reported: number[] = [];
+    const report = (chunkIndex: number, ratio: number) => {
+      ratios[chunkIndex] = Math.max(ratios[chunkIndex], ratio);
+      reported.push(Math.round(chunkedProgressPercent(ratios)));
+    };
+
+    report(3, 1);
+    report(0, 0.1);
+    report(1, 0.5);
+    report(0, 1);
+
+    expect(reported).toEqual([44, 45, 52, 64]);
+    expect(reported).toEqual([...reported].sort((left, right) => left - right));
+  });
+
+  it("does not let a speech job percent move backwards", () => {
+    const service = new SpeechProcessingService({} as any);
+    const job = {
+      id: "job-1",
+      activationId: "activation-1",
+      tenantId: "tenant-1",
+      status: "queued",
+      percent: 60,
+      message: "Ahead",
+      provider: "azure",
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    };
+    (service as any).jobs.set(job.id, job);
+
+    (service as any).updateJob(job.id, 42, "Earlier chunk reported later");
+
+    expect(job.percent).toBe(60);
+    expect(job.message).toBe("Ahead");
   });
 
   it("falls back to json when an OpenAI-compatible provider rejects verbose_json", async () => {

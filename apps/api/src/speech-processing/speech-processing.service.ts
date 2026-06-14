@@ -345,10 +345,15 @@ export class SpeechProcessingService {
   ): Promise<TranscriptPayload> {
     progress(25, "Preparing long recording for Microsoft speech processing.");
     const chunks = await splitAudioForSpeech(input, duration, AZURE_TRANSCRIBE_CHUNK_SECONDS, "Microsoft speech processing");
+    const chunkRatios = new Array(chunks.length).fill(0);
+    const reportChunkProgress = (chunk: AudioChunk, ratio: number, message: string) => {
+      chunkRatios[chunk.index] = Math.max(chunkRatios[chunk.index], clampRatio(ratio));
+      progress(chunkedProgressPercent(chunkRatios), message);
+    };
     const results = await mapWithConcurrency(chunks, AZURE_TRANSCRIBE_PARALLEL_CHUNKS, async (chunk) => {
       const chunkNumber = chunk.index + 1;
       const chunkLabel = `${chunkNumber}/${chunks.length}`;
-      progress(30 + (chunk.index / chunks.length) * 55, `Sending audio chunk ${chunkLabel} to Microsoft STT.`);
+      reportChunkProgress(chunk, 0, `Sending audio chunk ${chunkLabel} to Microsoft STT.`);
       const chunkInput = {
         ...input,
         audioBuffer: chunk.buffer,
@@ -362,13 +367,14 @@ export class SpeechProcessingService {
         providerProfile,
         chunk.durationSeconds,
         (ratio) => {
-          progress(
-            30 + ((chunk.index + ratio) / chunks.length) * 55,
+          reportChunkProgress(
+            chunk,
+            ratio,
             `Microsoft STT is transcribing chunk ${chunkLabel}.`
           );
         }
       );
-      progress(30 + ((chunk.index + 1) / chunks.length) * 55, `Microsoft STT finished chunk ${chunkLabel}.`);
+      reportChunkProgress(chunk, 1, `Microsoft STT finished chunk ${chunkLabel}.`);
 
       return {
         index: chunk.index,
@@ -438,8 +444,11 @@ export class SpeechProcessingService {
     const job = this.jobs.get(jobId);
     if (!job) return;
     job.status = "processing";
-    job.percent = clampPercent(percent);
-    job.message = message;
+    const nextPercent = clampPercent(percent);
+    if (nextPercent >= job.percent) {
+      job.percent = nextPercent;
+      job.message = message;
+    }
     job.updatedAt = Date.now();
   }
 
@@ -553,6 +562,12 @@ export function shouldChunkOpenAiTranscription(modelName: string, durationSecond
 export function shouldChunkAzureTranscription(durationSeconds?: number | null) {
   const duration = Number(durationSeconds || 0);
   return Number.isFinite(duration) && duration > AZURE_TRANSCRIBE_CHUNK_SECONDS;
+}
+
+export function chunkedProgressPercent(ratios: number[], startPercent = 30, spanPercent = 55) {
+  if (!ratios.length) return startPercent;
+  const completedRatio = ratios.reduce((sum, ratio) => sum + clampRatio(ratio), 0) / ratios.length;
+  return startPercent + completedRatio * spanPercent;
 }
 
 async function splitAudioForSpeech(
@@ -821,6 +836,11 @@ function transcriptSegments(data: any, fallbackText: string, duration: number): 
 
 function clampPercent(value: number) {
   return Math.min(Math.max(Math.round(value), 0), 100);
+}
+
+function clampRatio(value: number) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(Math.max(value, 0), 1);
 }
 
 function userErrorMessage(error: any) {
