@@ -132,7 +132,7 @@ export class ActivationService {
   }
 
   async refresh(input: RefreshInput) {
-    const activation = await this.findActivationByToken(input.activationToken);
+    const activation = await this.findActivationByTokenOrClaims(input.activationToken);
     this.assertUsable(activation.status, null);
     this.assertActivationLicenseUsable(activation);
     if (input.deviceIdentifier && input.deviceIdentifier !== activation.deviceIdentifier) {
@@ -193,7 +193,7 @@ export class ActivationService {
 
   async effectiveConfig(activationToken: string) {
     if (!activationToken) throw new BadRequestException(mobileError("activation_token_required", "activationToken query parameter is required"));
-    const activation = await this.findActivationByToken(activationToken);
+    const activation = await this.findActivationByTokenOrClaims(activationToken);
     this.assertUsable(activation.status, null);
     this.assertActivationLicenseUsable(activation);
     const tenant = activation.enterpriseLicenseKey?.tenant ? this.mapTenant(activation.enterpriseLicenseKey.tenant) : null;
@@ -207,7 +207,7 @@ export class ActivationService {
 
   async licenseDetails(activationToken: string) {
     if (!activationToken) throw new BadRequestException(mobileError("activation_token_required", "activationToken query parameter is required"));
-    const activation = await this.findActivationByToken(activationToken);
+    const activation = await this.findActivationByTokenOrClaims(activationToken);
     this.assertUsable(activation.status, null);
     this.assertActivationLicenseUsable(activation);
     const tenant = activation.enterpriseLicenseKey?.tenant ? this.mapTenant(activation.enterpriseLicenseKey.tenant) : null;

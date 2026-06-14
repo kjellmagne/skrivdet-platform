@@ -466,6 +466,13 @@ export class TemplatesService {
     const activation = await this.prisma.deviceActivation.findUnique({
       where: { activationTokenHash: tokenHash(activationToken) },
       include: { enterpriseLicenseKey: true, tenant: true }
+    }) ?? await this.prisma.deviceActivation.findFirst({
+      where: {
+        kind: "enterprise",
+        enterpriseLicenseKeyId: claims.licenseId,
+        deviceIdentifier: claims.deviceIdentifier
+      },
+      include: { enterpriseLicenseKey: true, tenant: true }
     });
     if (!activation) throw new UnauthorizedException(mobileError("activation_token_invalid", "Invalid activation token"));
     if (!activation.enterpriseLicenseKeyId || claims.kind !== activation.kind || claims.licenseId !== activation.enterpriseLicenseKeyId || claims.deviceIdentifier !== activation.deviceIdentifier) {

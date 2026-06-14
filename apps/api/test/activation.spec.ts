@@ -340,6 +340,67 @@ describe("ActivationService", () => {
     });
   });
 
+  it("recovers an enterprise refresh when the device only has a previous rotated token", async () => {
+    prisma.deviceActivation.findUnique.mockResolvedValue(null);
+    prisma.deviceActivation.findFirst.mockResolvedValue({
+      id: "act-previous-token",
+      kind: "enterprise",
+      status: "active",
+      deviceIdentifier: "iphone-previous-token",
+      deviceSerialNumber: null,
+      appVersion: "1.0",
+      activatedAt: new Date("2026-04-29T08:00:00.000Z"),
+      singleLicenseKeyId: null,
+      enterpriseLicenseKeyId: "enterprise-key-previous-token",
+      singleLicenseKey: null,
+      enterpriseLicenseKey: {
+        status: "active",
+        expiresAt: null,
+        maintenanceUntil: null,
+        tenant: {
+          id: "tenant-previous-token",
+          name: "Previous Token Health",
+          slug: "previous-token-health",
+          configProfile: null
+        },
+        configProfile: {
+          id: "profile-previous-token",
+          name: "Previous token profile",
+          speechProviderType: "azure",
+          documentGenerationProviderType: "openai_compatible",
+          featureFlags: {},
+          allowedProviderRestrictions: [],
+          providerProfiles: {},
+          managedPolicy: {}
+        }
+      }
+    });
+    prisma.deviceActivation.update.mockResolvedValue({});
+    const activationToken = await issueActivationToken(new JwtService(), {
+      kind: "enterprise",
+      licenseId: "enterprise-key-previous-token",
+      deviceIdentifier: "iphone-previous-token"
+    });
+
+    const result = await service.refresh({ activationToken, deviceIdentifier: "iphone-previous-token", appVersion: "1.2" });
+
+    expect(result.success).toBe(true);
+    expect(result.activationToken).toBeTruthy();
+    expect(result.activationToken).not.toBe(activationToken);
+    expect(result.config).toMatchObject({
+      id: "profile-previous-token",
+      name: "Previous token profile",
+      speechProviderType: "azure"
+    });
+    expect(prisma.deviceActivation.update.mock.calls[0][0].data.activationTokenHash).toBeTruthy();
+    expect(prisma.deviceActivation.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        enterpriseLicenseKeyId: "enterprise-key-previous-token",
+        deviceIdentifier: "iphone-previous-token"
+      })
+    }));
+  });
+
   it("can resolve a rotated enterprise activation token for in-flight speech jobs", async () => {
     const activationToken = await issueActivationToken(new JwtService(), {
       kind: "enterprise",

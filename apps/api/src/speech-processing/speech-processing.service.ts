@@ -92,7 +92,7 @@ export class SpeechProcessingService {
   constructor(private readonly activationService: ActivationService) {}
 
   async createJob(activationToken: string, input: CreateSpeechJobInput) {
-    const activation = await this.activationService.assertEnterpriseActivationToken(activationToken);
+    const activation = await this.activationService.assertEnterpriseActivationToken(activationToken, { allowRotatedToken: true });
     const provider = normalizeProvider(input.provider);
     const providerProfile = this.assertProviderOffloadEnabled(activation, provider);
 
